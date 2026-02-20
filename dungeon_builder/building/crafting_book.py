@@ -176,11 +176,14 @@ def _check_mana_infusion(grid: VoxelGrid, x: int, y: int, z: int, held_type: int
     # Only base ingots, not already-enchanted
     if target not in (VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT):
         return False
-    # Check for lava within 3 blocks
+    # Check for lava within 3 blocks (voxel type or fluid lava_level)
     for dx in range(-3, 4):
         for dy in range(-3, 4):
             for dz in range(-3, 4):
-                if grid.get(x + dx, y + dy, z + dz) == VOXEL_LAVA:
+                nx, ny, nz = x + dx, y + dy, z + dz
+                if grid.get(nx, ny, nz) == VOXEL_LAVA:
+                    return True
+                if grid.in_bounds(nx, ny, nz) and grid.get_lava_level(nx, ny, nz) > 0:
                     return True
     return False
 
@@ -464,7 +467,10 @@ def _has_any_solid_neighbor(grid: VoxelGrid, x: int, y: int, z: int) -> bool:
 def _has_lava_below(grid: VoxelGrid, x: int, y: int, z: int, max_depth: int = 2) -> bool:
     """Check if there is lava within *max_depth* cells below (z+1..z+max_depth)."""
     for dz in range(1, max_depth + 1):
-        if grid.get(x, y, z + dz) == VOXEL_LAVA:
+        nz = z + dz
+        if grid.get(x, y, nz) == VOXEL_LAVA:
+            return True
+        if grid.in_bounds(x, y, nz) and grid.get_lava_level(x, y, nz) > 0:
             return True
     return False
 
@@ -545,7 +551,7 @@ def _check_pressure_plate(grid: VoxelGrid, x: int, y: int, z: int, held_type: in
         return False
     # Air above (z-1 is shallower)
     if z == 0:
-        return True  # surface counts as "air above"
+        return True  # topmost layer counts as "air above"
     return grid.get(x, y, z - 1) == VOXEL_AIR
 
 

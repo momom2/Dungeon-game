@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from dungeon_builder.core.event_bus import EventBus
+    from dungeon_builder.core.keybinding_registry import KeybindingRegistry
     from dungeon_builder.core.time_manager import TimeManager
     from dungeon_builder.world.voxel_grid import VoxelGrid
     from dungeon_builder.dungeon_core.core import DungeonCore
@@ -29,9 +30,11 @@ class GameState:
         self.build_system: BuildSystem | None = None
         self.move_system: MoveSystem | None = None
         self.pathfinder: AStarPathfinder | None = None
+        self.keybinding_registry: KeybindingRegistry | None = None
 
         # Current build mode for mouse interaction
         self.build_mode: str = "dig"
         self.game_over: bool = False
         self.menu_open: bool = True  # True at startup (main menu showing)
         self.craft_mode_active: bool = False  # True when player selected a recipe to place
+        self.dev_mode: bool = True  # Starts in dev mode (toggleable in Options)

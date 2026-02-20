@@ -5,16 +5,27 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from direct.gui.DirectGui import DirectFrame, DirectLabel, DirectButton
+from direct.gui.DirectGui import (
+    DirectFrame, DirectLabel, DirectButton, DirectScrolledFrame,
+)
 from panda3d.core import TextNode
 from direct.showbase.ShowBase import ShowBase
 from direct.task.Task import Task
 
-from dungeon_builder.config import VOXEL_COLORS, ARCHETYPE_COLORS
+import dungeon_builder.config as _cfg
+from dungeon_builder.config import (
+    VOXEL_COLORS,
+    ARCHETYPE_COLORS,
+    RENDER_MODE_HEAT,
+    RENDER_MODE_HUMIDITY,
+    RENDER_MODE_MATTER,
+    RENDER_MODE_STRUCTURAL,
+)
 
 if TYPE_CHECKING:
     from dungeon_builder.core.event_bus import EventBus
     from dungeon_builder.core.game_state import GameState
+    from dungeon_builder.core.keybinding_registry import KeybindingRegistry
 
 logger = logging.getLogger("dungeon_builder.ui")
 
@@ -29,16 +40,28 @@ _VTYPE_NAMES = {
     60: "Iron Ingot", 61: "Copper Ingot", 62: "Gold Ingot", 63: "Enchanted Metal",
     70: "Reinforced Wall", 71: "Spike", 72: "Door", 73: "Treasure",
     74: "Rolling Stone", 75: "Tarp", 76: "Slope", 77: "Stairs",
+    78: "Gold Bait", 79: "Heat Beacon", 80: "Pressure Plate", 81: "Iron Bars",
+    82: "Floodgate", 83: "Alarm Bell", 84: "Fragile Floor", 85: "Pipe",
+    86: "Pump", 87: "Steam Vent",
+    88: "Water Source", 89: "Water Sink", 90: "Lava Source", 91: "Lava Sink",
+    # 92 was "Infused Lava" — removed (replaced by mana_crystals on lava)
 }
 
 
 class HUD:
     """HUD showing game state, tool info, held material, and error messages."""
 
-    def __init__(self, app: ShowBase, event_bus: EventBus, game_state: GameState) -> None:
+    def __init__(
+        self,
+        app: ShowBase,
+        event_bus: EventBus,
+        game_state: GameState,
+        keybinding_registry: KeybindingRegistry | None = None,
+    ) -> None:
         self.app = app
         self.event_bus = event_bus
         self.game_state = game_state
+        self._kb = keybinding_registry
 
         a2d = app.aspect2d
 
@@ -176,16 +199,25 @@ class HUD:
             parent=a2d,
         )
 
-        # Hand contents
-        self.hand_label = DirectLabel(
-            text="Hand: Empty",
+        # Bag button (compact; shows total count; click toggles inventory panel)
+        self.bag_btn = DirectButton(
+            text="Bag: 0",
             text_fg=(0.9, 0.9, 0.7, 1),
-            text_scale=0.05,
-            text_align=TextNode.A_left,
+            text_scale=0.04,
+            text_align=TextNode.A_center,
+            frameSize=(-0.10, 0.10, -0.03, 0.04),
+            frameColor=(0.15, 0.15, 0.2, 0.8),
             pos=(-0.5, 0, -0.95),
-            frameColor=(0, 0, 0, 0),
+            command=self._toggle_bag_panel,
             parent=a2d,
         )
+
+        # Inventory panel (hidden initially, built lazily)
+        self._bag_panel_visible = False
+        self._bag_panel: DirectFrame | None = None
+        self._bag_scroll: DirectScrolledFrame | None = None
+        self._bag_item_labels: list[DirectLabel] = []
+        self._build_bag_panel()
 
         # Hover info (shows voxel type under cursor)
         self.hover_label = DirectLabel(
@@ -210,7 +242,7 @@ class HUD:
             parent=a2d,
         )
 
-        # Debug: spawn buttons (temporary, for testing)
+        # Debug: spawn buttons (dev mode only)
         self.spawn_surface_btn = DirectButton(
             text="Spawn Surface",
             text_scale=0.035,
@@ -231,6 +263,8 @@ class HUD:
             command=lambda: event_bus.publish("debug_spawn_underworld_party"),
             parent=a2d,
         )
+        self._update_spawn_buttons()
+        event_bus.subscribe("dev_mode_changed", self._on_dev_mode_changed)
 
         # Error message (center, red, fades)
         self.error_label = DirectLabel(
@@ -261,6 +295,9 @@ class HUD:
         )
         self.game_over_frame.hide()
 
+        # Render mode tracking (for context-specific hover info)
+        self._render_mode = RENDER_MODE_MATTER
+
         # Intruder tracking
         self._intruder_count = 0
         self._underworld_count = 0
@@ -286,12 +323,15 @@ class HUD:
         event_bus.subscribe("voxel_hover_clear", self._on_voxel_hover_clear)
         event_bus.subscribe("craft_mode_entered", self._on_craft_mode_entered)
         event_bus.subscribe("craft_mode_exited", self._on_craft_mode_exited)
+        event_bus.subscribe("render_mode_changed", self._on_render_mode_changed)
 
         # Keyboard shortcuts
-        app.accept("space", self._toggle_pause)
-        app.accept("+", self._speed_up)
-        app.accept("=", self._speed_up)  # Unshifted + key
-        app.accept("-", self._speed_down)
+        _get = lambda a, fb: self._kb.get(a) if self._kb else fb
+        app.accept(_get("toggle_pause", "space"), self._toggle_pause)
+        app.accept(_get("speed_up", "+"), self._speed_up)
+        app.accept(_get("speed_up_alt", "="), self._speed_up)
+        app.accept(_get("speed_down", "-"), self._speed_down)
+        app.accept(_get("toggle_inventory", "i"), self._toggle_bag_panel)
 
     def _set_speed(self, speed: int) -> None:
         self.game_state.time_manager.set_speed(speed)
@@ -312,6 +352,114 @@ class HUD:
         tm = self.game_state.time_manager
         new_speed = max(0, tm.speed - 1)
         tm.set_speed(new_speed)
+
+    # ── Inventory (bag) panel ────────────────────────────────────────
+
+    def _build_bag_panel(self) -> None:
+        """Build the left-side inventory panel (hidden initially)."""
+        a2d = self.app.aspect2d
+        self._bag_panel = DirectFrame(
+            frameColor=(0.05, 0.05, 0.1, 0.92),
+            frameSize=(-1.35, -0.55, -0.70, 0.70),
+            pos=(0, 0, 0),
+            parent=a2d,
+            sortOrder=50,
+        )
+        # Title
+        DirectLabel(
+            text="Inventory [I]",
+            text_fg=(0.9, 0.85, 0.5, 1),
+            text_scale=0.045,
+            text_align=TextNode.A_left,
+            pos=(-1.30, 0, 0.62),
+            frameColor=(0, 0, 0, 0),
+            parent=self._bag_panel,
+        )
+        # Close button
+        DirectButton(
+            text="X",
+            text_scale=0.04,
+            text_fg=(0.9, 0.3, 0.3, 1),
+            frameSize=(-0.03, 0.03, -0.02, 0.035),
+            frameColor=(0.15, 0.15, 0.2, 0.8),
+            pos=(-0.58, 0, 0.64),
+            command=self._toggle_bag_panel,
+            parent=self._bag_panel,
+        )
+        # Scrollable area for items
+        self._bag_scroll = DirectScrolledFrame(
+            frameColor=(0, 0, 0, 0),
+            frameSize=(-1.35, -0.57, -0.68, 0.56),
+            canvasSize=(-1.35, -0.60, -1.0, 0),
+            scrollBarWidth=0.025,
+            pos=(0, 0, 0),
+            parent=self._bag_panel,
+        )
+        self._bag_scroll.horizontalScroll.hide()
+        self._bag_panel.hide()
+
+    def _toggle_bag_panel(self) -> None:
+        """Show/hide the inventory panel."""
+        if self._bag_panel is None:
+            return
+        self._bag_panel_visible = not self._bag_panel_visible
+        if self._bag_panel_visible:
+            self._refresh_bag_panel()
+            self._bag_panel.show()
+        else:
+            self._bag_panel.hide()
+
+    def _refresh_bag_panel(self) -> None:
+        """Rebuild the item list inside the inventory panel."""
+        if self._bag_scroll is None:
+            return
+        canvas = self._bag_scroll.getCanvas()
+        # Remove old labels
+        for lbl in self._bag_item_labels:
+            lbl.destroy()
+        self._bag_item_labels.clear()
+
+        ms = self.game_state.move_system
+        if ms is None or not ms.held_materials:
+            lbl = DirectLabel(
+                text="  (empty)",
+                text_fg=(0.5, 0.5, 0.5, 1),
+                text_scale=0.038,
+                text_align=TextNode.A_left,
+                pos=(-1.30, 0, -0.05),
+                frameColor=(0, 0, 0, 0),
+                parent=canvas,
+            )
+            self._bag_item_labels.append(lbl)
+            self._bag_scroll["canvasSize"] = (-1.35, -0.60, -0.15, 0)
+            return
+
+        y = -0.05
+        y_step = 0.055
+        for vtype, count in sorted(ms.held_materials.items()):
+            name = _VTYPE_NAMES.get(vtype, f"Type {vtype}")
+            # Color-code using VOXEL_COLORS
+            vc = VOXEL_COLORS.get(vtype, (0.7, 0.7, 0.7, 1.0))
+            text_color = (
+                min(1.0, vc[0] + 0.3),
+                min(1.0, vc[1] + 0.3),
+                min(1.0, vc[2] + 0.3),
+                1.0,
+            )
+            lbl = DirectLabel(
+                text=f"  {name}  x{count}",
+                text_fg=text_color,
+                text_scale=0.038,
+                text_align=TextNode.A_left,
+                pos=(-1.30, 0, y),
+                frameColor=(0, 0, 0, 0),
+                parent=canvas,
+            )
+            self._bag_item_labels.append(lbl)
+            y -= y_step
+
+        total_h = len(ms.held_materials) * y_step + 0.1
+        self._bag_scroll["canvasSize"] = (-1.35, -0.60, -total_h, 0)
 
     def _on_core_damaged(self, hp: int, max_hp: int) -> None:
         self.core_hp_label["text"] = f"Core: {hp}/{max_hp}"
@@ -397,18 +545,30 @@ class HUD:
         self._show_error(f"Recipe discovered: {recipe}!", color=(0.4, 0.9, 0.4, 1))
 
     def _refresh_hand(self) -> None:
+        """Update the bag button text and refresh inventory panel if visible."""
         ms = self.game_state.move_system
         if ms is None or not ms.held_materials:
-            self.hand_label["text"] = "Hand: Empty"
+            self.bag_btn["text"] = "Bag: 0"
         else:
-            parts = []
-            for vtype, count in sorted(ms.held_materials.items()):
-                name = _VTYPE_NAMES.get(vtype, f"Type {vtype}")
-                parts.append(f"{name} x{count}")
-            self.hand_label["text"] = "Hand: " + ", ".join(parts)
+            total = sum(ms.held_materials.values())
+            self.bag_btn["text"] = f"Bag: {total}"
+        if self._bag_panel_visible:
+            self._refresh_bag_panel()
 
-    def _on_error_message(self, text: str) -> None:
-        self._show_error(text)
+    def _update_spawn_buttons(self) -> None:
+        """Show spawn buttons only in dev mode."""
+        if _cfg.DEV_MODE:
+            self.spawn_surface_btn.show()
+            self.spawn_underworld_btn.show()
+        else:
+            self.spawn_surface_btn.hide()
+            self.spawn_underworld_btn.hide()
+
+    def _on_dev_mode_changed(self, **kwargs) -> None:
+        self._update_spawn_buttons()
+
+    def _on_error_message(self, text: str, color: tuple = (1, 0.3, 0.3, 1), **kwargs) -> None:
+        self._show_error(text, color)
 
     def _show_error(self, text: str, color: tuple = (1, 0.3, 0.3, 1)) -> None:
         self.error_label["text"] = text
@@ -441,17 +601,35 @@ class HUD:
             self.reputation_label["text_fg"] = (0.6, 0.6, 0.6, 1)
 
     def _on_voxel_hover(self, x: int, y: int, z: int, **kwargs) -> None:
-        """Display voxel type and coordinates when hovering."""
+        """Display voxel type, coordinates, and mode-specific data when hovering."""
         grid = self.game_state.voxel_grid
         if grid is None:
             return
         vtype = grid.get(x, y, z)
         name = _VTYPE_NAMES.get(vtype, f"Type {vtype}")
-        self.hover_label["text"] = f"[{name}] ({x}, {y}, {-z})"
+        text = f"[{name}] ({x}, {y}, {-z})"
+
+        mode = self._render_mode
+        if mode == RENDER_MODE_HEAT:
+            temp = float(grid.temperature[x, y, z])
+            text += f"  {temp:.0f}\u00b0C"
+        elif mode == RENDER_MODE_HUMIDITY:
+            hum = float(grid.humidity[x, y, z])
+            text += f"  Humidity: {hum:.2f}"
+        elif mode == RENDER_MODE_STRUCTURAL:
+            stress = float(grid.stress_ratio[x, y, z])
+            load = float(grid.load[x, y, z])
+            text += f"  Stress: {stress:.2f}  Load: {load:.1f}"
+
+        self.hover_label["text"] = text
 
     def _on_voxel_hover_clear(self, **kwargs) -> None:
         """Clear hover display when cursor leaves voxels."""
         self.hover_label["text"] = ""
+
+    def _on_render_mode_changed(self, mode: str, **kwargs) -> None:
+        """Track the current render mode for context-specific hover info."""
+        self._render_mode = mode
 
     def _on_craft_mode_entered(self, recipe_name: str, **kwargs) -> None:
         """Show craft mode indicator in the tool label area."""

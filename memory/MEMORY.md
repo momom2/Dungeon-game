@@ -102,6 +102,27 @@
 - Zero external assets, no UV coordinates, no vertex format change
 - All overlays (dig gold, door alpha, loose dim) work naturally with noise on top
 
+### Render Modes (`rendering/voxel_renderer.py`, `ui/render_mode_selector.py`)
+- 5 modes cycled via V key or dropdown: matter, humidity, heat, structural, prospecting
+- **Humidity mode**: per-face coloring (unique among modes)
+  - **Top face**: blue→cyan→green gradient (h=0 deep blue, h=0.5 cyan, h=1.0 green)
+  - **Side faces** (east/west/north/south): lerp from grey-blue (dry: 0.25,0.30,0.45) to deep water blue (wet: 0.05,0.15,0.65)
+  - Gives impression of solid water when block is fully inundated
+  - `humidity_to_color(h, face_name=)` — face_name=None uses top gradient
+  - `_get_color()` accepts optional `face_name` param; build loop calls per-face for humidity mode only
+- **Heat mode**: blue-white-red gradient (0-20°C deep blue, 20-100 white, 100-500 red, 500+ bright red)
+- **Structural mode**: green-yellow-orange-red gradient on stress_ratio
+- **Prospecting mode**: desaturated grey + ore glow markers for encased ores
+- Mode switch → `set_render_mode()` → `_force_rebuild_all()` (rebuilds every chunk)
+
+### Layer Depth Fade (`rendering/layer_slice.py`)
+- `LAYER_DEPTH_FADE` config bool (default True) — toggleable in Options → Visibility
+- When True: asymmetric transparency (above: 2 layers max, below: 5 layers with fade)
+- When False: all 21 layers shown at full opacity, no transparency
+- `set_focus_z()` checks `_cfg.LAYER_DEPTH_FADE` first; if False, shows all + returns early
+- Responds to `"config_changed"` event with key `"LAYER_DEPTH_FADE"`
+- Toggle button in Visibility frame: "Depth Fade: ON/OFF"
+
 ### Book of Crafting (`building/crafting_journal.py` + `ui/crafting_book_panel.py`)
 - **CraftingJournal**: Tracks which recipes player has crafted (testable, no Panda3D)
   - Subscribes to `"craft_success"` events, records unique recipe names
@@ -293,4 +314,4 @@
 - `dungeon_builder/dungeon_core/` — core
 - `dungeon_builder/ui/` — hud, render_mode_selector, crafting_book_panel
 - `dungeon_builder/world/physics/pipe.py` — NEW: Pipe & pump network physics
-- `tests/` — 1208 tests across 52 files, all passing
+- `tests/` — 1546 tests across 55+ files, all passing

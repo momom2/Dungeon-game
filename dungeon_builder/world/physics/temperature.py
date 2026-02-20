@@ -11,12 +11,14 @@ from dungeon_builder.config import (
     VOXEL_MANA_CRYSTAL,
     VOXEL_HEAT_BEACON,
     VOXEL_STEAM_VENT,
+    VOXEL_LAVA_SOURCE,
     VOXEL_CONDUCTIVITY,
     LAVA_TEMPERATURE,
     MANA_CRYSTAL_TEMPERATURE,
     HEAT_BEACON_TEMPERATURE,
     STEAM_VENT_HEAT_PULSE,
     STEAM_VENT_RANGE,
+    SURFACE_Z,
     SURFACE_HEAT_LOSS,
     TEMPERATURE_TICK_INTERVAL,
     DIFFUSION_RATE,
@@ -34,9 +36,12 @@ class TemperaturePhysics:
     """Diffuses heat through the voxel grid based on conductivity.
 
     Runs every TEMPERATURE_TICK_INTERVAL ticks.
-    - Lava voxels stay at LAVA_TEMPERATURE.
+    - Lava SOURCE blocks stay at LAVA_TEMPERATURE (regular lava conducts but cools).
+    - Lava has low thermal conductivity to rock (insulating crust at boundary).
+    - Lava heat transport is now flow-based (handled by WaterPhysics).
+    - Lava cells with mana_crystals >= 1 are pinned at LAVA_TEMPERATURE.
     - Mana crystals stay at MANA_CRYSTAL_TEMPERATURE.
-    - Surface (z=0) loses heat each tick.
+    - Surface (z <= SURFACE_Z) loses heat each tick.
     - Heat flows between neighbours proportional to min(cond_self, cond_neighbor).
     """
 
@@ -60,10 +65,10 @@ class TemperaturePhysics:
     def _diffuse(self) -> None:
         """Discrete heat equation: T_new = T + α·Δt·∇²T.
 
-        With α·Δt = DIFFUSION_RATE * min(cond_a, cond_b) and 6 neighbors,
-        the CFL condition requires DIFFUSION_RATE * max_cond * 6 < 1.0.
-        Currently 0.1 * 1.0 * 6 = 0.6 < 1, so the scheme is unconditionally
-        stable and non-negative — no per-flow clamping needed.
+        Diffusion: α·Δt = DIFFUSION_RATE * min(cond_a, cond_b) with 6 neighbors.
+        CFL: DIFFUSION_RATE * max_cond * 6 = 0.1 * 1.0 * 6 = 0.6 < 1.
+
+        Lava heat transport is now flow-based (handled by WaterPhysics).
         """
         grid = self.voxel_grid
         temp = grid.temperature
@@ -100,12 +105,19 @@ class TemperaturePhysics:
         # Apply flow (conservative: sum of total_flow is zero)
         temp += total_flow
 
-        # Surface heat loss (z=0) — environmental sink
-        temp[:, :, 0] *= (1.0 - SURFACE_HEAT_LOSS)
+        # Surface/sky heat loss (z <= SURFACE_Z) — environmental sink
+        temp[:, :, :SURFACE_Z + 1] *= (1.0 - SURFACE_HEAT_LOSS)
 
         # Fixed-temperature voxels — explicit sources/sinks
-        lava_mask = voxels == VOXEL_LAVA
-        temp[lava_mask] = LAVA_TEMPERATURE
+        # Lava SOURCE blocks generate heat (regular lava conducts but cools)
+        lava_src_mask = voxels == VOXEL_LAVA_SOURCE
+        if np.any(lava_src_mask):
+            temp[lava_src_mask] = LAVA_TEMPERATURE
+
+        # Mana crystals in lava — fixed temperature (mana-crystal-powered heat source)
+        mana_lava_mask = (grid.mana_crystals >= 1) & (grid.lava_level > 0)
+        if np.any(mana_lava_mask):
+            temp[mana_lava_mask] = LAVA_TEMPERATURE
 
         mana_mask = voxels == VOXEL_MANA_CRYSTAL
         temp[mana_mask] = MANA_CRYSTAL_TEMPERATURE

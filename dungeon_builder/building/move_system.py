@@ -157,6 +157,68 @@ class MoveSystem:
         logger.debug("Picked up type=%d at (%d, %d, %d)", vtype, x, y, z)
         return True
 
+    def pick_up_batch(
+        self, positions: list[tuple[int, int, int]],
+    ) -> int:
+        """Pick up loose material at multiple positions in one batch.
+
+        Skips invalid positions (air, not visible, not loose, out of bounds).
+        Publishes a single ``material_picked_up`` event at the end instead
+        of one per block, and marks dirty chunks in bulk instead of
+        per-voxel ``voxel_changed`` events.
+
+        Returns the number of blocks actually picked up.
+        """
+        picked = 0
+        for x, y, z in positions:
+            if not self.voxel_grid.in_bounds(x, y, z):
+                continue
+            vtype = self.voxel_grid.get(x, y, z)
+            if vtype == VOXEL_AIR:
+                continue
+            if not self.voxel_grid.is_visible(x, y, z):
+                continue
+            if not self.voxel_grid.is_loose(x, y, z):
+                continue
+
+            # Capture temperature, humidity, and metal_type
+            block_temp = self.voxel_grid.get_temperature(x, y, z)
+            block_hum = self.voxel_grid.get_humidity(x, y, z)
+            block_metal = self.voxel_grid.get_metal_type(x, y, z)
+
+            # Accumulate into bag with running average
+            old_count = self.held_materials.get(vtype, 0)
+            new_count = old_count + 1
+            if old_count > 0:
+                old_temp = self.held_temperatures.get(vtype, 0.0)
+                old_hum = self.held_humidities.get(vtype, 0.0)
+                self.held_temperatures[vtype] = (
+                    (old_temp * old_count + block_temp) / new_count
+                )
+                self.held_humidities[vtype] = (
+                    (old_hum * old_count + block_hum) / new_count
+                )
+            else:
+                self.held_temperatures[vtype] = block_temp
+                self.held_humidities[vtype] = block_hum
+            if block_metal != METAL_NONE:
+                self.held_metal_types[vtype] = block_metal
+            self.held_materials[vtype] = new_count
+            self._last_picked_type = vtype
+
+            # Remove voxel without per-voxel events
+            self.voxel_grid.set(x, y, z, VOXEL_AIR)  # no event_bus → no voxel_changed
+            self.voxel_grid.set_temperature(x, y, z, 0.0)
+            self.voxel_grid.set_humidity(x, y, z, 0.0)
+            picked += 1
+
+        if picked > 0:
+            self.event_bus.publish(
+                "material_picked_up",
+                materials=dict(self.held_materials),
+            )
+        return picked
+
     # ── Drop ─────────────────────────────────────────────────────────
 
     def drop(self, x: int, y: int, z: int) -> bool:

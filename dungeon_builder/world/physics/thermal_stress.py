@@ -161,5 +161,6 @@ class ThermalStressPhysics:
 
         grid.loose[xs, ys, zs] = True
         fatigue[xs, ys, zs] = 0.0  # Reset fatigue on cracked blocks
+        grid.bump_physics_generation()
         grid.mark_all_dirty()
         self.event_bus.publish("thermal_crack", count=int(count))

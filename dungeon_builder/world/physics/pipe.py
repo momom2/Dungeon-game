@@ -1,7 +1,8 @@
-"""Pipe & pump network physics for heat/humidity transport.
+"""Pipe & pump network physics for heat/humidity/water transport.
 
 Pipes form networks that conduct heat and humidity between connected cells.
-Pumps drive directional flow through their pipe networks.
+Pumps drive directional flow through their pipe networks, including water
+level transport (pulling water from intake and distributing through pipes).
 
 Network topology is cached and invalidated on voxel changes.
 """
@@ -16,10 +17,12 @@ import numpy as np
 from dungeon_builder.config import (
     VOXEL_PIPE,
     VOXEL_PUMP,
+    VOXEL_WATER,
     PIPE_CONDUCTIVITY_BASE,
     PUMP_CONVECTION_RATE,
     PUMP_TICK_INTERVAL,
     METAL_CONDUCTIVITY_MULT,
+    PIPE_WATER_TRANSFER_RATE,
 )
 
 if TYPE_CHECKING:
@@ -79,7 +82,7 @@ class PipePhysics:
         self._update()
 
     def _update(self) -> None:
-        """Run passive conduction and active pumping."""
+        """Run passive conduction, active pumping, and water transport."""
         if self._cache_dirty:
             self._rebuild_networks()
             self._cache_dirty = False
@@ -161,6 +164,79 @@ class PipePhysics:
                     for nx, ny, nz in pipes:
                         temp[nx, ny, nz] += per_pipe_heat
                         hum[nx, ny, nz] += per_pipe_hum
+
+            # --- Active water transport: pumps move water through pipes ---
+            self._transport_water(grid, pipes, pumps)
+
+    def _transport_water(
+        self,
+        grid: VoxelGrid,
+        pipes: list[tuple[int, int, int]],
+        pumps: list[tuple[int, int, int]],
+    ) -> None:
+        """Move water through pipe networks via pump action.
+
+        Each pump pulls water from its intake side and distributes it to
+        the output end of the pipe network.  Passive pipes don't move
+        water — pumps are required.
+
+        Transfer amount is ``PIPE_WATER_TRANSFER_RATE`` (in water_level
+        units 0-255) per pump tick.
+        """
+        if not pumps:
+            return
+
+        voxels = grid.grid
+        water = grid.water_level
+
+        for px, py, pz in pumps:
+            direction = int(grid.block_state[px, py, pz])
+            dx, dy, dz = _PUMP_DIRS.get(direction, (1, 0, 0))
+
+            # Intake is OPPOSITE the pump direction
+            sx, sy, sz = px - dx, py - dy, pz - dz
+            if not grid.in_bounds(sx, sy, sz):
+                continue
+
+            # Source must contain water
+            if int(voxels[sx, sy, sz]) != VOXEL_WATER:
+                continue
+
+            source_level = int(water[sx, sy, sz])
+            if source_level <= 0:
+                continue
+
+            # Output is in the pump direction (end of network on that side)
+            ox, oy, oz = px + dx, py + dy, pz + dz
+            if not grid.in_bounds(ox, oy, oz):
+                continue
+
+            # Output cell must be air or water (can receive water)
+            out_type = int(voxels[ox, oy, oz])
+            if out_type not in (0, VOXEL_WATER):  # 0 = VOXEL_AIR
+                continue
+
+            # Calculate transfer amount
+            transfer = min(
+                int(PIPE_WATER_TRANSFER_RATE * 255),
+                source_level,
+                255 - int(water[ox, oy, oz]),
+            )
+
+            if transfer <= 0:
+                continue
+
+            # Remove from source
+            new_src = source_level - transfer
+            water[sx, sy, sz] = new_src
+            if new_src <= 0:
+                voxels[sx, sy, sz] = 0  # VOXEL_AIR
+
+            # Add to output
+            water[ox, oy, oz] = int(water[ox, oy, oz]) + transfer
+            voxels[ox, oy, oz] = VOXEL_WATER
+
+            grid.mark_all_dirty()
 
     def _rebuild_networks(self) -> None:
         """BFS from each pump to find connected pipe networks."""

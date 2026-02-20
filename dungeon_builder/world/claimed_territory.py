@@ -73,14 +73,50 @@ class ClaimedTerritorySystem:
         self.core_y = core_y
         self.core_z = core_z
 
+        self._dirty = False  # Deferred recompute flag (from batch events)
+        self._recomputed_this_tick = False  # Prevents repeated recomputes in one tick
+
         event_bus.subscribe("tick", self._on_tick)
+        event_bus.subscribe("voxel_changed", self._on_voxel_changed)
+        event_bus.subscribe("dig_complete", self._on_dig_complete)
+        event_bus.subscribe("dig_batch_queued", self._mark_dirty)
+        event_bus.subscribe("dig_batch_cancelled", self._mark_dirty)
+        event_bus.subscribe("dig_batch_pending", self._mark_dirty)
+        event_bus.subscribe("dig_batch_complete", self._mark_dirty)
+        event_bus.subscribe("force_territory_recompute", self._on_force_recompute)
 
         # Initial computation
         self.recompute()
 
+    def _mark_dirty(self, **kw) -> None:
+        """Mark territory as needing recompute (deferred to next tick)."""
+        self._dirty = True
+
+    def _recompute_once(self) -> None:
+        """Recompute at most once per tick.  Subsequent calls are skipped."""
+        if self._recomputed_this_tick:
+            return
+        self._recomputed_this_tick = True
+        self.recompute()
+
     def _on_tick(self, tick: int, **kw) -> None:
-        if tick % CLAIMED_TICK_INTERVAL == 0:
-            self.recompute()
+        self._recomputed_this_tick = False  # Reset at start of each tick
+        if self._dirty or tick % CLAIMED_TICK_INTERVAL == 0:
+            self._dirty = False
+            self._recompute_once()
+
+    def _on_voxel_changed(self, **kw) -> None:
+        """Recompute immediately on voxel type change (at most once per tick)."""
+        self._recompute_once()
+
+    def _on_dig_complete(self, **kw) -> None:
+        """Recompute on dig complete (at most once per tick)."""
+        self._recompute_once()
+
+    def _on_force_recompute(self, **kw) -> None:
+        """Force recompute on demand (e.g. before render mode switch)."""
+        self._recomputed_this_tick = False  # Allow even if already done this tick
+        self.recompute()
 
     def recompute(self) -> None:
         """Full recomputation of claimed territory and visibility."""
@@ -88,15 +124,31 @@ class ClaimedTerritorySystem:
         voxels = grid.grid
         w, d, h = grid.width, grid.depth, grid.height
 
+        # Dev mode: everything is claimed and visible — skip flood-fill
+        if _cfg.DEV_MODE:
+            old_claimed = grid.claimed.copy()
+            old_visible = grid.visible.copy()
+            grid.claimed[:] = True
+            grid.visible[:] = True
+            if not np.array_equal(old_claimed, grid.claimed) or not np.array_equal(old_visible, grid.visible):
+                grid.mark_all_dirty()
+                self.event_bus.publish("claimed_territory_changed")
+            return
+
         # Traversable mask: air, water, and functional blocks propagate claims
         traversable = np.zeros_like(voxels, dtype=np.bool_)
         for vtype in _CLAIM_TRAVERSABLE:
             traversable |= (voxels == vtype)
 
-        # Seed from air cells 6-adjacent to the core block
+        # Seed from traversable cells near the core block.
+        # The core can float in mid-air, so if its immediate neighbors are
+        # not traversable we fall back to the first solid block directly
+        # below the core (the "pillar" or floor), then search outward from
+        # *that* position.  Finally a wider-radius search around the core.
         cx, cy, cz = self.core_x, self.core_y, self.core_z
         seed = np.zeros((w, d, h), dtype=np.bool_)
 
+        # 1) Try 6-adjacent to core
         for dx, dy, dz in ((1, 0, 0), (-1, 0, 0),
                            (0, 1, 0), (0, -1, 0),
                            (0, 0, 1), (0, 0, -1)):
@@ -105,7 +157,53 @@ class ClaimedTerritorySystem:
                 if traversable[nx, ny, nz]:
                     seed[nx, ny, nz] = True
 
+        # 2) Fallback: first solid block directly below core → seed from
+        #    traversable cells adjacent to *that* block.  Allows the core
+        #    to float in a large room while territory grows from the floor.
         if not np.any(seed):
+            for z_below in range(cz + 1, h):
+                if not traversable[cx, cy, z_below]:
+                    # Found solid ground — seed from its traversable neighbors
+                    for dx, dy, dz in ((1, 0, 0), (-1, 0, 0),
+                                       (0, 1, 0), (0, -1, 0),
+                                       (0, 0, 1), (0, 0, -1)):
+                        nx, ny, nz = cx + dx, cy + dy, z_below + dz
+                        if 0 <= nx < w and 0 <= ny < d and 0 <= nz < h:
+                            if traversable[nx, ny, nz]:
+                                seed[nx, ny, nz] = True
+                    if np.any(seed):
+                        logger.info(
+                            "recompute: core floating, seeded from solid "
+                            "block below at (%d, %d, %d)",
+                            cx, cy, z_below,
+                        )
+                    break
+
+        # 3) Wider radius search around core (robust against edge cases)
+        if not np.any(seed):
+            _SEED_SEARCH_RADIUS = 4
+            r = _SEED_SEARCH_RADIUS
+            x_lo = max(0, cx - r)
+            x_hi = min(w, cx + r + 1)
+            y_lo = max(0, cy - r)
+            y_hi = min(d, cy + r + 1)
+            z_lo = max(0, cz - r)
+            z_hi = min(h, cz + r + 1)
+            local_trav = traversable[x_lo:x_hi, y_lo:y_hi, z_lo:z_hi]
+            if np.any(local_trav):
+                seed[x_lo:x_hi, y_lo:y_hi, z_lo:z_hi] = local_trav
+                logger.info(
+                    "recompute: no immediate seed, found %d traversable cells "
+                    "within radius %d of core",
+                    int(np.sum(local_trav)), r,
+                )
+
+        if not np.any(seed):
+            logger.warning(
+                "recompute: NO SEED — no traversable cells near "
+                "core (%d, %d, %d)! All visible set to False.",
+                cx, cy, cz,
+            )
             grid.claimed[:] = False
             grid.visible[:] = False
             # Core itself is always visible
@@ -138,8 +236,9 @@ class ClaimedTerritorySystem:
 
             connected = expanded
 
-        # Store claimed territory
+        # Store claimed territory (save old state for change detection)
         old_claimed = grid.claimed.copy()
+        old_visible = grid.visible.copy()
         grid.claimed[:] = connected
 
         # Compute visibility: solid blocks adjacent to at least one claimed cell
@@ -193,9 +292,17 @@ class ClaimedTerritorySystem:
 
         grid.visible[:] = vis
 
-        # If claimed territory changed, trigger chunk re-renders
-        if not np.array_equal(old_claimed, connected):
+        claimed_count = int(np.sum(connected))
+        visible_count = int(np.sum(vis))
+        logger.debug("recompute: claimed=%d, visible=%d", claimed_count, visible_count)
+
+        # If claimed territory or visibility changed, trigger chunk re-renders
+        claimed_changed = not np.array_equal(old_claimed, connected)
+        visible_changed = not np.array_equal(old_visible, vis)
+        if claimed_changed or visible_changed:
             grid.mark_all_dirty()
             self.event_bus.publish("claimed_territory_changed")
-            claimed_count = int(np.sum(connected))
-            logger.debug("Claimed territory updated: %d air cells", claimed_count)
+            logger.debug(
+                "Territory event fired: claimed_changed=%s, visible_changed=%s",
+                claimed_changed, visible_changed,
+            )

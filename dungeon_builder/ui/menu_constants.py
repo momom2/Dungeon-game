@@ -47,6 +47,41 @@ FOG_COLOR_SETTINGS: list[dict] = [
 ]
 
 
+# ── Water flow model selection ─────────────────────────────────────────────
+
+WATER_FLOW_MODELS: list[str] = [
+    "lattice_boltzmann",
+    "jacobi_projection",
+]
+
+WATER_FLOW_MODEL_LABELS: dict[str, str] = {
+    "lattice_boltzmann": "Lattice Boltzmann D3Q7",
+    "jacobi_projection": "Jacobi Projection",
+}
+
+# Per-model tuning sliders (only shown when that model is active)
+
+LBM_SETTINGS: list[dict] = [
+    {"attr": "LBM_TAU",                "label": "Relaxation Time",  "min": 0.51, "max": 2.0,   "step": 0.01, "type": float},
+    {"attr": "LBM_GRAVITY",            "label": "Gravity Force",    "min": 0.001,"max": 0.05,  "step": 0.001,"type": float},
+    {"attr": "LBM_REST_DENSITY",       "label": "Rest Density",     "min": 0.5,  "max": 2.0,   "step": 0.1,  "type": float},
+    {"attr": "LBM_PRESSURE_DIFFUSION", "label": "Transfer Rate",    "min": 0.1,  "max": 2.0,   "step": 0.1,  "type": float},
+]
+
+JACOBI_SETTINGS: list[dict] = [
+    {"attr": "JACOBI_ITERATIONS",         "label": "Solve Iterations", "min": 1,   "max": 20,    "step": 1,    "type": int},
+    {"attr": "JACOBI_GRAVITY",            "label": "Gravity",          "min": 0.1, "max": 5.0,   "step": 0.1,  "type": float},
+    {"attr": "JACOBI_FRICTION",           "label": "Friction",         "min": 0.5, "max": 1.0,   "step": 0.01, "type": float},
+    {"attr": "JACOBI_VISCOSITY",          "label": "Viscosity",        "min": 0.0, "max": 0.5,   "step": 0.01, "type": float},
+    {"attr": "JACOBI_PRESSURE_DIFFUSION", "label": "Transfer Rate",    "min": 0.1, "max": 2.0,   "step": 0.1,  "type": float},
+]
+
+WATER_MODEL_SETTINGS: dict[str, list[dict]] = {
+    "lattice_boltzmann": LBM_SETTINGS,
+    "jacobi_projection": JACOBI_SETTINGS,
+}
+
+
 def capture_defaults(settings: list[dict]) -> dict[str, object]:
     """Snapshot current config values for the given settings list."""
     return {s["attr"]: getattr(_cfg, s["attr"]) for s in settings}

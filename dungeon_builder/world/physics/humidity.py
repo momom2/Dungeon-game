@@ -14,9 +14,12 @@ from dungeon_builder.config import (
     VOXEL_AIR,
     VOXEL_LAVA,
     VOXEL_WATER,
+    VOXEL_WATER_SOURCE,
+    VOXEL_WATER_SINK,
     VOXEL_STEAM_VENT,
     VOXEL_POROSITY,
     LAVA_TEMPERATURE,
+    SURFACE_Z,
     HUMIDITY_TICK_INTERVAL,
     HUMIDITY_DIFFUSION_RATE,
     HUMIDITY_SURFACE_LOSS,
@@ -137,12 +140,13 @@ class HumidityPhysics:
         hum += total_hum_flow
         temp += total_heat_flow
 
-        # Surface evaporation (z=0) — environmental sink
-        hum[:, :, 0] *= (1.0 - HUMIDITY_SURFACE_LOSS)
+        # Surface/sky evaporation (z <= SURFACE_Z) — environmental sink
+        hum[:, :, :SURFACE_Z + 1] *= (1.0 - HUMIDITY_SURFACE_LOSS)
 
         # Steam from lava: blocks adjacent to lava gain humidity
         # (lava is an explicit source — allowed to create humidity)
-        lava_mask = voxels == VOXEL_LAVA
+        # Use lava_level > 0 to detect fluid lava (replaces old VOXEL_INFUSED_LAVA check)
+        lava_mask = grid.lava_level > 0
         if np.any(lava_mask):
             steam = np.zeros_like(hum)
             # Expand lava mask to 6-connected neighbors
@@ -161,8 +165,13 @@ class HumidityPhysics:
             steam_level = HUMIDITY_SOURCE_LEVEL * poro[receives_steam]
             hum[receives_steam] = np.maximum(hum[receives_steam], steam_level)
 
-        # Humidity from water blocks: adjacent blocks gain humidity (scaled by porosity)
-        water_mask = voxels == VOXEL_WATER
+        # Water sinks: force humidity to 0
+        sink_mask = voxels == VOXEL_WATER_SINK
+        if np.any(sink_mask):
+            hum[sink_mask] = 0.0
+
+        # Humidity from water blocks and water sources: adjacent blocks gain humidity
+        water_mask = (voxels == VOXEL_WATER) | (voxels == VOXEL_WATER_SOURCE)
         if np.any(water_mask):
             water_adj = np.zeros_like(hum, dtype=np.bool_)
             if grid.width > 1:

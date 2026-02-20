@@ -9,6 +9,7 @@ from dungeon_builder.config import (
     GRID_DEPTH,
     GRID_HEIGHT,
     CHUNK_SIZE,
+    SURFACE_Z,
     VOXEL_AIR,
     VOXEL_BEDROCK,
 )
@@ -46,9 +47,28 @@ class VoxelGrid:
         self.thermal_fatigue = np.zeros((width, depth, height), dtype=np.float32)
         self.block_state = np.zeros((width, depth, height), dtype=np.uint8)
         self.metal_type = np.zeros((width, depth, height), dtype=np.uint8)
+        self.lava_level = np.zeros((width, depth, height), dtype=np.uint8)
+        self.mana_crystals = np.zeros((width, depth, height), dtype=np.uint8)
         self.claimed = np.zeros((width, depth, height), dtype=np.bool_)
         self.visible = np.zeros((width, depth, height), dtype=np.bool_)
+        # Terrain heightmap: z-level of the topmost solid block per column.
+        # Used by water physics to distinguish surface (above terrain) from
+        # underground (at/below terrain).  Set by GeologyGenerator.
+        self.heightmap = np.full((width, depth), SURFACE_Z, dtype=np.int32)
+        # Water velocity field (enhanced water dynamics)
+        self.water_vx = np.zeros((width, depth, height), dtype=np.float32)
+        self.water_vy = np.zeros((width, depth, height), dtype=np.float32)
+        self.water_vz = np.zeros((width, depth, height), dtype=np.float32)
+        # Water pressure field (used by Weakly Compressible and Jacobi strategies)
+        self.water_pressure = np.zeros((width, depth, height), dtype=np.float32)
+        # LBM distribution functions: lazily allocated (7 floats per cell)
+        self._lbm_f: np.ndarray | None = None
         self._dirty_chunks: set[tuple[int, int, int]] = set()
+
+        # Physics generation counter: bumped whenever grid/loose change.
+        # Used by gravity and structural physics to skip recomputation
+        # without expensive full-array comparison.
+        self._physics_generation: int = 0
 
         # Number of chunks per axis
         self.chunks_x = (width + CHUNK_SIZE - 1) // CHUNK_SIZE
@@ -56,6 +76,8 @@ class VoxelGrid:
 
     def get(self, x: int, y: int, z: int) -> int:
         if not self.in_bounds(x, y, z):
+            if z < 0 and 0 <= x < self.width and 0 <= y < self.depth:
+                return VOXEL_AIR  # Above surface is open sky
             return VOXEL_BEDROCK  # Out of bounds = impassable
         return int(self.grid[x, y, z])
 
@@ -70,6 +92,7 @@ class VoxelGrid:
         self.metal_type[x, y, z] = 0  # Reset metal type when type changes
         if voxel_type == VOXEL_AIR:
             self.loose[x, y, z] = False
+        self._physics_generation += 1
 
         # Mark affected chunks dirty
         cx, cy = x // CHUNK_SIZE, y // CHUNK_SIZE
@@ -162,6 +185,24 @@ class VoxelGrid:
         if self.in_bounds(x, y, z):
             self.water_level[x, y, z] = max(0, min(255, level))
 
+    def get_lava_level(self, x: int, y: int, z: int) -> int:
+        if not self.in_bounds(x, y, z):
+            return 0
+        return int(self.lava_level[x, y, z])
+
+    def set_lava_level(self, x: int, y: int, z: int, level: int) -> None:
+        if self.in_bounds(x, y, z):
+            self.lava_level[x, y, z] = max(0, min(255, level))
+
+    def get_mana_crystals(self, x: int, y: int, z: int) -> int:
+        if not self.in_bounds(x, y, z):
+            return 0
+        return int(self.mana_crystals[x, y, z])
+
+    def set_mana_crystals(self, x: int, y: int, z: int, count: int) -> None:
+        if self.in_bounds(x, y, z):
+            self.mana_crystals[x, y, z] = max(0, min(255, count))
+
     def get_thermal_fatigue(self, x: int, y: int, z: int) -> float:
         if not self.in_bounds(x, y, z):
             return 0.0
@@ -193,6 +234,23 @@ class VoxelGrid:
         self.metal_type[x, y, z] = metal
         cx, cy = x // CHUNK_SIZE, y // CHUNK_SIZE
         self._dirty_chunks.add((cx, cy, z))
+
+    def ensure_lbm_arrays(self) -> np.ndarray:
+        """Lazily allocate D3Q7 distribution functions for Lattice Boltzmann."""
+        if self._lbm_f is None:
+            self._lbm_f = np.zeros(
+                (self.width, self.depth, self.height, 7), dtype=np.float32
+            )
+        return self._lbm_f
+
+    def bump_physics_generation(self) -> None:
+        """Increment the physics generation counter.
+
+        Called by physics systems after directly modifying grid/loose arrays
+        (bypassing ``set()``).  Used by gravity and structural physics to
+        cheaply detect whether a recomputation is needed.
+        """
+        self._physics_generation += 1
 
     def pop_dirty_chunks(self) -> set[tuple[int, int, int]]:
         dirty = self._dirty_chunks.copy()

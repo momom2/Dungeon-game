@@ -33,6 +33,7 @@ from direct.showbase.ShowBase import ShowBase
 if TYPE_CHECKING:
     from dungeon_builder.core.event_bus import EventBus
     from dungeon_builder.core.game_state import GameState
+    from dungeon_builder.core.keybinding_registry import KeybindingRegistry
     from dungeon_builder.building.crafting_journal import CraftingJournal
     from dungeon_builder.building.move_system import MoveSystem
 
@@ -75,12 +76,14 @@ class CraftingBookPanel:
         crafting_journal: CraftingJournal,
         move_system: MoveSystem,
         game_state: GameState | None = None,
+        keybinding_registry: KeybindingRegistry | None = None,
     ) -> None:
         self.app = app
         self.event_bus = event_bus
         self.journal = crafting_journal
         self.move_system = move_system
         self.game_state = game_state
+        self._kb = keybinding_registry
         self._visible = False
         self._selected_recipe: str | None = None  # name of recipe in craft mode
         self._pinned_recipe: str | None = None     # name of pinned recipe
@@ -95,7 +98,8 @@ class CraftingBookPanel:
         self._pinned_frame.hide()
 
         # Keyboard toggle
-        app.accept("b", self.toggle)
+        _key = self._kb.get("toggle_crafting_book") if self._kb else "b"
+        app.accept(_key, self.toggle)
 
         # HUD button toggle (via event)
         event_bus.subscribe("toggle_crafting_book", self._on_toggle_event)
@@ -170,19 +174,20 @@ class CraftingBookPanel:
         # Hide horizontal scrollbar
         self.scroll_frame.horizontalScroll.hide()
 
-        # Recipe entry widgets: list of (button, desc_btn, recipe_name)
+        # Recipe entry widgets: list of (button, desc_btn, recipe_name, pin_btn)
         # desc_btn is now a DirectButton (clickable) for ingredient highlighting
-        self._recipe_widgets: list[tuple[DirectButton, DirectButton, str]] = []
+        self._recipe_widgets: list[tuple[DirectButton, DirectButton, str, DirectButton]] = []
         self._create_recipe_entries()
 
     def _build_pinned_overlay(self) -> None:
         """Build the small floating overlay shown when the panel is closed
-        and a recipe is pinned."""
+        and a recipe is pinned.  Clicking the label enters craft mode;
+        the small X button unpins."""
         a2d = self.app.aspect2d
         self._pinned_frame = DirectFrame(
             frameColor=(0.08, 0.08, 0.14, 0.88),
-            frameSize=(0.0, 0.45, -0.07, 0.04),
-            pos=(1.1, 0, -0.85),
+            frameSize=(0.0, 0.50, -0.07, 0.04),
+            pos=(1.05, 0, -0.85),
             parent=a2d,
             sortOrder=55,
         )
@@ -197,9 +202,20 @@ class CraftingBookPanel:
             parent=self._pinned_frame,
             command=self._on_pinned_overlay_click,
         )
+        # Small unpin button
+        self._pinned_unpin_btn = DirectButton(
+            text="x",
+            text_scale=0.028,
+            text_fg=(0.7, 0.3, 0.3, 1),
+            frameSize=(-0.018, 0.018, -0.015, 0.02),
+            frameColor=(0.18, 0.12, 0.12, 0.7),
+            pos=(0.46, 0, 0.015),
+            parent=self._pinned_frame,
+            command=self._on_pinned_unpin_click,
+        )
 
     def _create_recipe_entries(self) -> None:
-        """Create a button + clickable description for each recipe slot."""
+        """Create a button + clickable description + pin button for each recipe slot."""
         recipes_data = self.journal.get_all_recipes_display()
         canvas = self.scroll_frame.getCanvas()
         y_start = -0.04
@@ -214,11 +230,26 @@ class CraftingBookPanel:
                 text_scale=0.038,
                 text_fg=(0.5, 0.5, 0.5, 1),
                 text_align=TextNode.A_left,
-                frameSize=(0.0, 0.72, -0.025, 0.045),
+                frameSize=(0.0, 0.65, -0.025, 0.045),
                 frameColor=(0.12, 0.12, 0.18, 0.7),
                 pos=(0.02, 0, y),
                 parent=canvas,
                 command=self._on_recipe_click,
+                extraArgs=[recipe_name],
+                state=DGG.DISABLED,
+            )
+
+            # Pin toggle button (circle icon)
+            pin_btn = DirectButton(
+                text="o",
+                text_scale=0.038,
+                text_fg=(0.45, 0.45, 0.45, 1),
+                text_align=TextNode.A_center,
+                frameSize=(-0.025, 0.025, -0.02, 0.035),
+                frameColor=(0.15, 0.15, 0.2, 0.6),
+                pos=(0.70, 0, y + 0.01),
+                parent=canvas,
+                command=self._on_pin_toggle,
                 extraArgs=[recipe_name],
                 state=DGG.DISABLED,
             )
@@ -237,7 +268,7 @@ class CraftingBookPanel:
                 extraArgs=[recipe_name],
                 state=DGG.DISABLED,
             )
-            self._recipe_widgets.append((btn, desc_btn, recipe_name))
+            self._recipe_widgets.append((btn, desc_btn, recipe_name, pin_btn))
 
         # Adjust canvas size to fit all entries
         total_h = len(recipes_data) * y_step + 0.1
@@ -246,21 +277,24 @@ class CraftingBookPanel:
     # ── Click handlers ────────────────────────────────────────────────
 
     def _on_recipe_click(self, recipe_name: str) -> None:
-        """Handle click on a recipe button — enter craft mode + toggle pin."""
+        """Handle click on a recipe button — enter craft mode only."""
         if recipe_name == "???":
             return
+        self.event_bus.publish(
+            "craft_recipe_selected", recipe_name=recipe_name
+        )
 
-        # Toggle pin
+    def _on_pin_toggle(self, recipe_name: str) -> None:
+        """Toggle pin state for a recipe (separate from craft mode)."""
+        if recipe_name == "???":
+            return
         if self._pinned_recipe == recipe_name:
             self._pinned_recipe = None
         else:
             self._pinned_recipe = recipe_name
         self._update_pinned_overlay()
-
-        # Also enter craft mode
-        self.event_bus.publish(
-            "craft_recipe_selected", recipe_name=recipe_name
-        )
+        if self._visible:
+            self._refresh()
 
     def _on_ingredient_click(self, recipe_name: str) -> None:
         """Scan current z-level for visible instances of the recipe's inputs.
@@ -299,7 +333,14 @@ class CraftingBookPanel:
             )
 
     def _on_pinned_overlay_click(self) -> None:
-        """Clicking the floating overlay unpins the recipe."""
+        """Clicking the floating overlay label enters craft mode for the pinned recipe."""
+        if self._pinned_recipe:
+            self.event_bus.publish(
+                "craft_recipe_selected", recipe_name=self._pinned_recipe,
+            )
+
+    def _on_pinned_unpin_click(self) -> None:
+        """Clicking the unpin button on the overlay unpins the recipe."""
         self._pinned_recipe = None
         self._update_pinned_overlay()
         if self._visible:
@@ -316,7 +357,7 @@ class CraftingBookPanel:
 
         held_keys = set(self.move_system.held_materials.keys())
 
-        for i, (btn, desc_btn, _old_name) in enumerate(self._recipe_widgets):
+        for i, (btn, desc_btn, _old_name, pin_btn) in enumerate(self._recipe_widgets):
             entry = recipes_data[i]
             actual_name = entry["name"]
 
@@ -345,6 +386,17 @@ class CraftingBookPanel:
 
                 # Enable the ingredient label (clickable) if discovered
                 desc_btn["state"] = DGG.NORMAL
+                pin_btn["state"] = DGG.NORMAL
+
+                # Pin button visual: ● gold if pinned, ○ grey if not
+                if is_pinned:
+                    pin_btn["text"] = "*"
+                    pin_btn["text_fg"] = (0.95, 0.80, 0.20, 1)
+                    pin_btn["frameColor"] = (0.25, 0.22, 0.08, 0.8)
+                else:
+                    pin_btn["text"] = "o"
+                    pin_btn["text_fg"] = (0.45, 0.45, 0.45, 1)
+                    pin_btn["frameColor"] = (0.15, 0.15, 0.2, 0.6)
 
                 if self._selected_recipe == actual_name:
                     # Active craft mode — golden highlight
@@ -358,11 +410,11 @@ class CraftingBookPanel:
                     desc_btn["text_fg"] = (0.7, 0.9, 0.7, 1)
                     btn["state"] = DGG.NORMAL
                 else:
-                    # Disabled — no material (but still clickable for pin/ingredient)
+                    # Disabled — no material (but still clickable for craft)
                     btn["text_fg"] = (0.5, 0.5, 0.5, 1)
                     btn["frameColor"] = (0.12, 0.12, 0.18, 0.7)
                     desc_btn["text_fg"] = (0.4, 0.4, 0.4, 1)
-                    btn["state"] = DGG.NORMAL  # always clickable for pin toggle
+                    btn["state"] = DGG.NORMAL
             else:
                 btn["text"] = "???"
                 desc_btn["text"] = "[Craft this recipe to reveal]"
@@ -371,9 +423,12 @@ class CraftingBookPanel:
                 desc_btn["text_fg"] = (0.3, 0.3, 0.3, 1)
                 btn["state"] = DGG.DISABLED
                 desc_btn["state"] = DGG.DISABLED
+                pin_btn["text"] = "o"
+                pin_btn["text_fg"] = (0.3, 0.3, 0.3, 1)
+                pin_btn["state"] = DGG.DISABLED
 
             # Update stored name reference
-            self._recipe_widgets[i] = (btn, desc_btn, actual_name)
+            self._recipe_widgets[i] = (btn, desc_btn, actual_name, pin_btn)
 
     # ── Pinned overlay ────────────────────────────────────────────────
 

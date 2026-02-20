@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from panda3d.core import NodePath, TransparencyAttrib
 
 import dungeon_builder.config as _cfg
-from dungeon_builder.config import GRID_HEIGHT
+from dungeon_builder.config import GRID_HEIGHT, CORE_Z
 
 if TYPE_CHECKING:
     from dungeon_builder.core.event_bus import EventBus
@@ -27,7 +27,7 @@ class LayerSliceManager:
     def __init__(self, render_node: NodePath, event_bus: EventBus | None = None) -> None:
         self.render_node = render_node
         self.layers: dict[int, NodePath] = {}
-        self.current_z: int = 1  # Start looking at just below surface
+        self.current_z: int = CORE_Z  # Start focused on the dungeon core
 
         self._create_layers()
         self.set_focus_z(self.current_z)
@@ -46,6 +46,14 @@ class LayerSliceManager:
     def set_focus_z(self, z: int) -> None:
         z = max(0, min(GRID_HEIGHT - 1, z))
         self.current_z = z
+
+        # When depth-fade is disabled, every layer is fully opaque & visible.
+        if not _cfg.LAYER_DEPTH_FADE:
+            for _zl, np in self.layers.items():
+                np.show()
+                np.clear_transparency()
+                np.set_alpha_scale(1.0)
+            return
 
         for zl, np in self.layers.items():
             if zl == z:
@@ -87,6 +95,7 @@ class LayerSliceManager:
         _LAYER_KEYS = {
             "LAYER_MAX_VISIBLE_BELOW", "LAYER_MAX_VISIBLE_ABOVE",
             "LAYER_ALPHA_ABOVE", "LAYER_ALPHA_BELOW",
+            "LAYER_DEPTH_FADE",
             "all_visibility",
         }
         if key in _LAYER_KEYS:

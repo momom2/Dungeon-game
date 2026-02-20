@@ -44,6 +44,7 @@ import dungeon_builder.config as _cfg
 from dungeon_builder.config import (
     VOXEL_AIR,
     VOXEL_STONE,
+    VOXEL_WATER,
     VOXEL_TREASURE,
     VOXEL_DOOR,
     VOXEL_SPIKE,
@@ -85,6 +86,9 @@ from dungeon_builder.config import (
     ALARM_BELL_DETECTION_RANGE,
     ALARM_BELL_COOLDOWN,
     FRAGILE_FLOOR_WEIGHT_THRESHOLD,
+    WATER_DAMAGE_DEPTH_THRESHOLD,
+    WATER_DAMAGE_PER_TICK,
+    WATER_CURRENT_PUSH_THRESHOLD,
 )
 
 _HAZARD_TYPES = frozenset((
@@ -147,14 +151,20 @@ class IntruderAI:
         event_bus.subscribe("voxel_changed", self._on_voxel_changed)
         event_bus.subscribe("debug_spawn_party", self._on_debug_spawn_party)
         event_bus.subscribe("debug_spawn_underworld_party", self._on_debug_spawn_uw)
+        event_bus.subscribe("dev_mode_changed", self._on_dev_mode_changed)
 
         self._game_over = False
-        self.spawning_enabled = False
+        # In normal mode, intruders spawn automatically.
+        # In dev mode, they only spawn via debug buttons.
+        self.spawning_enabled = not _cfg.DEV_MODE
 
     # ── Event handlers ─────────────────────────────────────────────
 
     def _on_game_over(self, **kwargs) -> None:
         self._game_over = True
+
+    def _on_dev_mode_changed(self, **kwargs) -> None:
+        self.spawning_enabled = not _cfg.DEV_MODE
 
     def _on_tick(self, tick: int) -> None:
         if self._game_over:
@@ -339,23 +349,40 @@ class IntruderAI:
         return IntruderObjective.PILLAGE
 
     def _find_spawn_position(self) -> tuple[int, int, int] | None:
-        """Find an air cell on Z=0 at or near the map edge."""
+        """Find an air cell above terrain at or near the map edge.
+
+        With varying terrain, the surface might not be air at SURFACE_Z.
+        Scan upward from SURFACE_Z to find the first air cell.
+        """
         grid = self.voxel_grid
         edges: list[tuple[int, int, int]] = []
+
+        def _find_air(x: int, y: int) -> tuple[int, int, int] | None:
+            """Scan from SURFACE_Z upward (decreasing z) to find air."""
+            for z in range(SURFACE_Z, -1, -1):
+                if grid.get(x, y, z) == VOXEL_AIR:
+                    return (x, y, z)
+            return None
+
+        # Try edge cells first
         for x in range(grid.width):
             for y in [0, grid.depth - 1]:
-                if grid.get(x, y, SURFACE_Z) == VOXEL_AIR:
-                    edges.append((x, y, SURFACE_Z))
+                pos = _find_air(x, y)
+                if pos is not None:
+                    edges.append(pos)
         for y in range(grid.depth):
             for x in [0, grid.width - 1]:
-                if grid.get(x, y, SURFACE_Z) == VOXEL_AIR:
-                    edges.append((x, y, SURFACE_Z))
+                pos = _find_air(x, y)
+                if pos is not None:
+                    edges.append(pos)
 
+        # Fallback: any cell
         if not edges:
             for x in range(grid.width):
                 for y in range(grid.depth):
-                    if grid.get(x, y, SURFACE_Z) == VOXEL_AIR:
-                        edges.append((x, y, SURFACE_Z))
+                    pos = _find_air(x, y)
+                    if pos is not None:
+                        edges.append(pos)
 
         if not edges:
             return None
@@ -487,10 +514,15 @@ class IntruderAI:
         # 1. Vision update
         self._update_vision(intruder)
 
-        # 2. Check frenzy activation
+        # 2. Water interaction (damage from deep water, current push)
+        self._check_water_interaction(intruder)
+        if not intruder.alive:
+            return
+
+        # 3. Check frenzy activation
         self._check_frenzy(intruder)
 
-        # 3. State-specific behavior
+        # 4. State-specific behavior
         state = intruder.state
         if state == IntruderState.SPAWNING:
             intruder.state = IntruderState.ADVANCING
@@ -580,6 +612,70 @@ class IntruderAI:
         if hp_ratio <= arch.frenzy_threshold and not intruder.frenzy_active:
             intruder.frenzy_active = True
             logger.info("Intruder #%d enters frenzy!", intruder.id)
+
+    # ── Water interaction ────────────────────────────────────────────
+
+    def _check_water_interaction(self, intruder: Intruder) -> None:
+        """Check for water hazards at the intruder's position.
+
+        - **Deep water damage**: If the intruder is in water and the water
+          column depth (contiguous water blocks above) meets or exceeds
+          ``WATER_DAMAGE_DEPTH_THRESHOLD``, the intruder takes
+          ``WATER_DAMAGE_PER_TICK`` damage each tick.
+        - **Current push**: If the water velocity magnitude at the intruder's
+          position exceeds ``WATER_CURRENT_PUSH_THRESHOLD``, the intruder is
+          pushed one cell in the dominant lateral velocity direction.
+        """
+        grid = self.voxel_grid
+        x, y, z = intruder.x, intruder.y, intruder.z
+
+        if not grid.in_bounds(x, y, z):
+            return
+
+        vtype = int(grid.grid[x, y, z])
+        if vtype != VOXEL_WATER:
+            return
+
+        # --- Deep water damage ---
+        # Count contiguous water above (toward surface, z-1, z-2, ...)
+        depth = 1
+        check_z = z - 1
+        while check_z >= 0 and int(grid.grid[x, y, check_z]) == VOXEL_WATER:
+            depth += 1
+            check_z -= 1
+
+        if depth >= WATER_DAMAGE_DEPTH_THRESHOLD:
+            intruder.take_damage(WATER_DAMAGE_PER_TICK)
+            intruder.morale = max(0.0, intruder.morale - MORALE_DAMAGE_PENALTY)
+            if not intruder.alive:
+                self._on_intruder_death(intruder)
+                return
+
+        # --- Current push ---
+        vx = float(grid.water_vx[x, y, z])
+        vy = float(grid.water_vy[x, y, z])
+        # Only consider lateral velocity (vx, vy), not vertical
+        speed = (vx * vx + vy * vy) ** 0.5
+
+        if speed < WATER_CURRENT_PUSH_THRESHOLD:
+            return
+
+        # Push in dominant lateral direction
+        if abs(vx) >= abs(vy):
+            push_dx = 1 if vx > 0 else -1
+            push_dy = 0
+        else:
+            push_dx = 0
+            push_dy = 1 if vy > 0 else -1
+
+        nx, ny = x + push_dx, y + push_dy
+        if (
+            grid.in_bounds(nx, ny, z)
+            and int(grid.grid[nx, ny, z]) in (VOXEL_AIR, VOXEL_WATER)
+        ):
+            intruder.x, intruder.y = nx, ny
+            intruder._vision_dirty = True
+            self.event_bus.publish("intruder_moved", intruder=intruder)
 
     # ── ADVANCING state ────────────────────────────────────────────
 

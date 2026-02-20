@@ -1,9 +1,9 @@
 """Game constants and balance parameters. No magic numbers elsewhere."""
 
 # Grid dimensions
-GRID_WIDTH = 64
-GRID_DEPTH = 64
-GRID_HEIGHT = 21  # Z index 0 (surface) to Z index 20 (deepest)
+GRID_WIDTH = 50
+GRID_DEPTH = 50
+GRID_HEIGHT = 40  # Z index 0 (highest sky) to Z index 39 (deepest)
 CHUNK_SIZE = 16   # 16x16x1 per chunk
 
 # Simulation timing
@@ -13,15 +13,16 @@ SPEED_MULTIPLIERS = {0: 0.0, 1: 1.0, 2: 3.0}  # pause / play / fast
 # RNG
 DEFAULT_SEED = 42
 
-# Z-level mapping: array index 0 = surface (world Z=0), index 20 = deepest (world Z=-20)
-SURFACE_Z = 0
-DEEPEST_Z = 20
+# Z-level mapping: 5 sky layers (0-4) above ground level (SURFACE_Z=5)
+# Array index 0 = highest sky, SURFACE_Z = flat ground, DEEPEST_Z = bedrock
+SURFACE_Z = 5
+DEEPEST_Z = 39
 
 # Dungeon core
 CORE_DEFAULT_HP = 100
-CORE_X = 32
-CORE_Y = 32
-CORE_Z = 10  # Array index (world Z = -10)
+CORE_X = GRID_WIDTH // 2   # Center of the map
+CORE_Y = GRID_DEPTH // 2   # Center of the map
+CORE_Z = 15  # Array index (shifted +5 from old value 10)
 
 # Layer-slice transparency (asymmetric: above vs below focus)
 # Above focus (toward surface, lower z-index): ceiling context, barely visible
@@ -30,6 +31,8 @@ LAYER_MAX_VISIBLE_ABOVE = 2
 # Below focus (deeper, higher z-index): extended depth view
 LAYER_ALPHA_BELOW = {1: 0.7, 2: 0.5, 3: 0.35, 4: 0.2, 5: 0.1}
 LAYER_MAX_VISIBLE_BELOW = 5
+# When False, all layers are shown at full opacity (no depth fade)
+LAYER_DEPTH_FADE = True
 
 # Voxel types (uint8 values for numpy array)
 VOXEL_AIR = 0
@@ -64,6 +67,12 @@ VOXEL_MANA_CRYSTAL = 43
 VOXEL_LAVA = 50
 VOXEL_WATER = 51
 
+# Face culling: render a face if the neighbor is one of these "transparent" types
+FACE_TRANSPARENT_VOXELS = frozenset({VOXEL_AIR, VOXEL_WATER, VOXEL_LAVA})
+
+# Fluid voxel types that render as partial-height cubes
+FLUID_VOXELS = frozenset({VOXEL_WATER, VOXEL_LAVA})
+
 # Crafted materials
 VOXEL_IRON_INGOT = 60
 VOXEL_COPPER_INGOT = 61
@@ -91,6 +100,13 @@ VOXEL_FRAGILE_FLOOR = 84
 VOXEL_PIPE = 85
 VOXEL_PUMP = 86
 VOXEL_STEAM_VENT = 87
+
+# Source/sink blocks (permanent world anchors)
+VOXEL_WATER_SOURCE = 88   # Always full (water_level=255), water flows out naturally
+VOXEL_WATER_SINK = 89     # Always empty (water_level=0, humidity=0), absorbs by physics
+VOXEL_LAVA_SOURCE = 90    # Always LAVA_TEMPERATURE, regenerates lava in adjacent air
+VOXEL_LAVA_SINK = 91      # Always cool, absorbs adjacent lava
+# VOXEL_INFUSED_LAVA = 92  # REMOVED: replaced by per-voxel mana_crystals count
 
 # ── Metal Type System ────────────────────────────────────────────────
 # Per-voxel uint8 array specifying what metal a block is made of.
@@ -198,6 +214,7 @@ MELTABLE_BLOCKS = frozenset({
 NON_DIGGABLE = frozenset({
     VOXEL_AIR, VOXEL_BEDROCK, VOXEL_CORE, VOXEL_LAVA, VOXEL_WATER,
     VOXEL_REINFORCED_WALL, VOXEL_IRON_BARS, VOXEL_FLOODGATE,
+    VOXEL_WATER_SOURCE, VOXEL_WATER_SINK, VOXEL_LAVA_SOURCE, VOXEL_LAVA_SINK,
 })
 
 # Porosity per voxel type (0.0 = impermeable, 1.0 = fully permeable)
@@ -245,6 +262,10 @@ VOXEL_POROSITY = {
     VOXEL_PIPE: 0.0,
     VOXEL_PUMP: 0.0,
     VOXEL_STEAM_VENT: 0.3,          # obsidian-derived, some porosity
+    VOXEL_WATER_SOURCE: 0.0,
+    VOXEL_WATER_SINK: 0.0,
+    VOXEL_LAVA_SOURCE: 0.0,
+    VOXEL_LAVA_SINK: 0.0,
 }
 
 # Thermal conductivity per voxel type (0.0 = insulator, 1.0 = perfect conductor)
@@ -268,7 +289,7 @@ VOXEL_CONDUCTIVITY = {
     VOXEL_COPPER_ORE: 0.55,
     VOXEL_GOLD_ORE: 0.6,
     VOXEL_MANA_CRYSTAL: 0.0,   # absorbs heat, does not conduct
-    VOXEL_LAVA: 1.0,
+    VOXEL_LAVA: 0.05,  # Low: solidified crust insulates; convection handles lava-lava
     VOXEL_WATER: 0.6,
     VOXEL_IRON_INGOT: 0.8,
     VOXEL_COPPER_INGOT: 0.85,
@@ -292,6 +313,10 @@ VOXEL_CONDUCTIVITY = {
     VOXEL_PIPE: 0.90,                 # good conductor (metal tube)
     VOXEL_PUMP: 0.80,
     VOXEL_STEAM_VENT: 0.80,
+    VOXEL_WATER_SOURCE: 0.6,
+    VOXEL_WATER_SINK: 0.5,
+    VOXEL_LAVA_SOURCE: 1.0,
+    VOXEL_LAVA_SINK: 0.8,
 }
 
 # Temperature physics
@@ -309,13 +334,25 @@ MAX_FALL_PER_TICK = 5            # Loose blocks fall up to 5 cells per tick
 MAX_CASCADE_PER_TICK = 64        # Cap structural failures per tick
 
 # Structural anchors (absorb all load, infinite capacity)
-STRUCTURAL_ANCHORS = frozenset({3, 4, 43})  # BEDROCK, CORE, MANA_CRYSTAL
+STRUCTURAL_ANCHORS = frozenset({
+    3, 4, 43,  # BEDROCK, CORE, MANA_CRYSTAL
+    VOXEL_WATER_SOURCE, VOXEL_WATER_SINK, VOXEL_LAVA_SOURCE, VOXEL_LAVA_SINK,
+})
 
 # Render modes
 RENDER_MODE_MATTER = "matter"
 RENDER_MODE_HUMIDITY = "humidity"
 RENDER_MODE_HEAT = "heat"
 RENDER_MODE_STRUCTURAL = "structural"
+RENDER_MODE_PROSPECTING = "prospecting"
+
+# Ore glow marker colors (for Prospecting mode — encased x-ray-visible ores)
+ORE_GLOW_COLORS: dict[int, tuple[float, float, float, float]] = {
+    VOXEL_IRON_ORE:     (0.60, 0.35, 0.25, 0.40),   # rusty orange
+    VOXEL_COPPER_ORE:   (0.45, 0.65, 0.50, 0.40),   # greenish copper
+    VOXEL_GOLD_ORE:     (0.95, 0.85, 0.20, 0.45),   # bright gold
+    VOXEL_MANA_CRYSTAL: (0.55, 0.30, 0.85, 0.45),   # purple glow
+}
 
 # Dig durations in ticks (at 20 ticks/sec)
 DIG_DURATION = {
@@ -352,7 +389,17 @@ DIG_DURATION = {
     VOXEL_STEAM_VENT: 80,    # 4 seconds (obsidian-like)
     # VOXEL_IRON_BARS and VOXEL_FLOODGATE are NON_DIGGABLE
 }
-MAX_CONCURRENT_DIGS = 999  # effectively unlimited — all reachable digs run simultaneously
+MAX_CONCURRENT_DIGS = 5  # mutable — upgrades can increase this at runtime
+AUTO_BAG_DIG = True  # When True, dug blocks go directly into the player's bag
+
+# ── Dev Mode ──────────────────────────────────────────────────────────
+# Game starts in dev mode.  Togglable in Options menu.
+DEV_MODE = True
+DEV_MAX_CONCURRENT_DIGS = 999  # unlimited digs in dev mode
+
+# Drag-select constants
+DRAG_SELECT_THRESHOLD = 0.02  # NDC distance to distinguish click from drag
+DRAG_VERTICAL_SENSITIVITY = 0.1  # NDC units of mouse Y movement per z-level
 
 # Colors per voxel type (RGBA floats)
 VOXEL_COLORS = {
@@ -398,6 +445,10 @@ VOXEL_COLORS = {
     VOXEL_PIPE: (0.72, 0.52, 0.35, 0.9),              # copper-ish (base, tinted by metal)
     VOXEL_PUMP: (0.55, 0.55, 0.60, 1.0),              # iron-ish (base, tinted by metal)
     VOXEL_STEAM_VENT: (0.15, 0.12, 0.18, 0.8),        # dark obsidian, semi-transparent
+    VOXEL_WATER_SOURCE: (0.9, 0.1, 0.1, 1.0),          # bright red (water origin)
+    VOXEL_WATER_SINK: (0.7, 0.0, 0.0, 1.0),            # dark red (water drain)
+    VOXEL_LAVA_SOURCE: (1.0, 0.4, 0.0, 0.9),           # bright orange (lava origin)
+    VOXEL_LAVA_SINK: (0.6, 0.2, 0.0, 0.9),             # dark red-brown (lava drain)
 }
 
 # ── Vertex noise: per-material color grain amplitude ──
@@ -428,6 +479,10 @@ VOXEL_NOISE: dict[int, float] = {
     VOXEL_PIPE: 0.03,           # smooth tube
     VOXEL_PUMP: 0.04,           # mechanical
     VOXEL_STEAM_VENT: 0.03,     # glassy
+    VOXEL_WATER_SOURCE: 0.08,   # shimmering
+    VOXEL_WATER_SINK: 0.05,     # subtle swirl
+    VOXEL_LAVA_SOURCE: 0.12,    # roiling
+    VOXEL_LAVA_SINK: 0.06,      # cooling crust
 }
 
 # Intruder defaults (legacy — used by decision.py until Phase 6 rewrite)
@@ -516,8 +571,8 @@ PARTY_WEIGHT_UNDERWORLD_SOLITARY = 0.25
 UNDERWORLD_SPAWN_INTERVAL = 600         # 30 seconds between underworld party spawns
 MAX_UNDERWORLD_PARTIES = 2              # Max concurrent underworld parties
 MAX_UNDERWORLDERS_TOTAL = 16            # Hard cap on alive underworlders
-UNDERWORLD_SPAWN_Z_MIN = 10            # Shallowest underworld spawn (CORE_Z)
-UNDERWORLD_SPAWN_Z_MAX = 18            # Deepest underworld spawn (2 above bedrock)
+UNDERWORLD_SPAWN_Z_MIN = 15            # Shallowest underworld spawn (CORE_Z)
+UNDERWORLD_SPAWN_Z_MAX = 23            # Deepest underworld spawn (2 above bedrock)
 
 # Corrosive Crawler
 CORROSIVE_DAMAGE_FACTOR = 0.5           # stress_ratio added to adjacent blocks after dig
@@ -648,54 +703,62 @@ VOXEL_WEIGHT = {
     VOXEL_PIPE: 10.0,
     VOXEL_PUMP: 14.0,
     VOXEL_STEAM_VENT: 9.0,
+    VOXEL_WATER_SOURCE: 0.0,
+    VOXEL_WATER_SINK: 0.0,
+    VOXEL_LAVA_SOURCE: 0.0,
+    VOXEL_LAVA_SINK: 0.0,
 }
 
 # Max load capacity (compressive strength) per voxel type
 # Compressive capacity (3× base values — cave-ins should be rare, deliberate action only)
 VOXEL_MAX_LOAD = {
     VOXEL_AIR: 0.0,
-    VOXEL_DIRT: 60.0,
-    VOXEL_STONE: 240.0,
+    VOXEL_DIRT: 90.0,
+    VOXEL_STONE: 360.0,
     VOXEL_BEDROCK: float("inf"),
     VOXEL_CORE: float("inf"),
-    VOXEL_SANDSTONE: 120.0,
-    VOXEL_LIMESTONE: 150.0,
-    VOXEL_SHALE: 90.0,
-    VOXEL_CHALK: 45.0,
-    VOXEL_SLATE: 210.0,
-    VOXEL_MARBLE: 255.0,
-    VOXEL_GNEISS: 225.0,
-    VOXEL_GRANITE: 360.0,
-    VOXEL_BASALT: 330.0,
-    VOXEL_OBSIDIAN: 180.0,
-    VOXEL_IRON_ORE: 195.0,
-    VOXEL_COPPER_ORE: 165.0,
-    VOXEL_GOLD_ORE: 135.0,
+    VOXEL_SANDSTONE: 180.0,
+    VOXEL_LIMESTONE: 225.0,
+    VOXEL_SHALE: 135.0,
+    VOXEL_CHALK: 68.0,
+    VOXEL_SLATE: 315.0,
+    VOXEL_MARBLE: 380.0,
+    VOXEL_GNEISS: 340.0,
+    VOXEL_GRANITE: 540.0,
+    VOXEL_BASALT: 495.0,
+    VOXEL_OBSIDIAN: 270.0,
+    VOXEL_IRON_ORE: 290.0,
+    VOXEL_COPPER_ORE: 250.0,
+    VOXEL_GOLD_ORE: 200.0,
     VOXEL_MANA_CRYSTAL: float("inf"),
     VOXEL_LAVA: 0.0,
     VOXEL_WATER: 0.0,
-    VOXEL_IRON_INGOT: 300.0,
-    VOXEL_COPPER_INGOT: 240.0,
-    VOXEL_GOLD_INGOT: 150.0,
-    VOXEL_ENCHANTED_METAL: 450.0,
-    VOXEL_REINFORCED_WALL: 600.0,  # strongest buildable block
-    VOXEL_SPIKE: 120.0,
-    VOXEL_DOOR: 240.0,
-    VOXEL_TREASURE: 90.0,
-    VOXEL_ROLLING_STONE: 300.0,
+    VOXEL_IRON_INGOT: 450.0,
+    VOXEL_COPPER_INGOT: 360.0,
+    VOXEL_GOLD_INGOT: 225.0,
+    VOXEL_ENCHANTED_METAL: 675.0,
+    VOXEL_REINFORCED_WALL: 900.0,  # strongest buildable block
+    VOXEL_SPIKE: 180.0,
+    VOXEL_DOOR: 360.0,
+    VOXEL_TREASURE: 135.0,
+    VOXEL_ROLLING_STONE: 450.0,
     VOXEL_TARP: 15.0,             # still fragile (breaks under a few blocks)
-    VOXEL_SLOPE: 240.0,
-    VOXEL_STAIRS: 240.0,
-    VOXEL_GOLD_BAIT: 90.0,
-    VOXEL_HEAT_BEACON: 240.0,
-    VOXEL_PRESSURE_PLATE: 240.0,
-    VOXEL_IRON_BARS: 300.0,
-    VOXEL_FLOODGATE: 450.0,
-    VOXEL_ALARM_BELL: 90.0,
+    VOXEL_SLOPE: 360.0,
+    VOXEL_STAIRS: 360.0,
+    VOXEL_GOLD_BAIT: 135.0,
+    VOXEL_HEAT_BEACON: 360.0,
+    VOXEL_PRESSURE_PLATE: 360.0,
+    VOXEL_IRON_BARS: 450.0,
+    VOXEL_FLOODGATE: 675.0,
+    VOXEL_ALARM_BELL: 135.0,
     VOXEL_FRAGILE_FLOOR: 24.0,       # still deliberately weak
-    VOXEL_PIPE: 240.0,
-    VOXEL_PUMP: 270.0,
-    VOXEL_STEAM_VENT: 120.0,
+    VOXEL_PIPE: 360.0,
+    VOXEL_PUMP: 405.0,
+    VOXEL_STEAM_VENT: 180.0,
+    VOXEL_WATER_SOURCE: float("inf"),
+    VOXEL_WATER_SINK: float("inf"),
+    VOXEL_LAVA_SOURCE: float("inf"),
+    VOXEL_LAVA_SINK: float("inf"),
 }
 
 # Load distribution (legacy fixed ratios, kept for reference)
@@ -749,6 +812,10 @@ VOXEL_STIFFNESS = {
     VOXEL_PIPE: 7.0,
     VOXEL_PUMP: 8.0,
     VOXEL_STEAM_VENT: 4.0,
+    VOXEL_WATER_SOURCE: 100.0,
+    VOXEL_WATER_SINK: 100.0,
+    VOXEL_LAVA_SOURCE: 100.0,
+    VOXEL_LAVA_SINK: 100.0,
 }
 
 # Tensile strength per voxel type (governs cantilever/bending failure)
@@ -757,48 +824,52 @@ VOXEL_STIFFNESS = {
 # Tensile strength (3× base — cantilevers are more forgiving)
 VOXEL_TENSILE_STRENGTH = {
     VOXEL_AIR: 0.0,
-    VOXEL_DIRT: 6.0,
-    VOXEL_STONE: 30.0,
+    VOXEL_DIRT: 9.0,
+    VOXEL_STONE: 45.0,
     VOXEL_BEDROCK: float("inf"),
     VOXEL_CORE: float("inf"),
-    VOXEL_SANDSTONE: 15.0,
-    VOXEL_LIMESTONE: 24.0,
-    VOXEL_SHALE: 12.0,
-    VOXEL_CHALK: 6.0,
-    VOXEL_SLATE: 36.0,
-    VOXEL_MARBLE: 30.0,
-    VOXEL_GNEISS: 33.0,
-    VOXEL_GRANITE: 45.0,
-    VOXEL_BASALT: 42.0,
-    VOXEL_OBSIDIAN: 18.0,      # brittle glass, snaps more easily
-    VOXEL_IRON_ORE: 24.0,
-    VOXEL_COPPER_ORE: 21.0,
-    VOXEL_GOLD_ORE: 15.0,
+    VOXEL_SANDSTONE: 22.0,
+    VOXEL_LIMESTONE: 36.0,
+    VOXEL_SHALE: 18.0,
+    VOXEL_CHALK: 9.0,
+    VOXEL_SLATE: 54.0,
+    VOXEL_MARBLE: 45.0,
+    VOXEL_GNEISS: 50.0,
+    VOXEL_GRANITE: 68.0,
+    VOXEL_BASALT: 63.0,
+    VOXEL_OBSIDIAN: 27.0,      # brittle glass, snaps more easily
+    VOXEL_IRON_ORE: 36.0,
+    VOXEL_COPPER_ORE: 32.0,
+    VOXEL_GOLD_ORE: 22.0,
     VOXEL_MANA_CRYSTAL: float("inf"),
     VOXEL_LAVA: 0.0,
     VOXEL_WATER: 0.0,
-    VOXEL_IRON_INGOT: 120.0,   # wrought iron, excellent in tension
-    VOXEL_COPPER_INGOT: 90.0,
-    VOXEL_GOLD_INGOT: 45.0,
-    VOXEL_ENCHANTED_METAL: 150.0,
-    VOXEL_REINFORCED_WALL: 180.0,
-    VOXEL_SPIKE: 60.0,
-    VOXEL_DOOR: 90.0,
-    VOXEL_TREASURE: 15.0,
-    VOXEL_ROLLING_STONE: 45.0,
+    VOXEL_IRON_INGOT: 180.0,   # wrought iron, excellent in tension
+    VOXEL_COPPER_INGOT: 135.0,
+    VOXEL_GOLD_INGOT: 68.0,
+    VOXEL_ENCHANTED_METAL: 225.0,
+    VOXEL_REINFORCED_WALL: 270.0,
+    VOXEL_SPIKE: 90.0,
+    VOXEL_DOOR: 135.0,
+    VOXEL_TREASURE: 22.0,
+    VOXEL_ROLLING_STONE: 68.0,
     VOXEL_TARP: 3.0,
-    VOXEL_SLOPE: 30.0,
-    VOXEL_STAIRS: 30.0,
-    VOXEL_GOLD_BAIT: 45.0,
-    VOXEL_HEAT_BEACON: 165.0,
-    VOXEL_PRESSURE_PLATE: 180.0,
-    VOXEL_IRON_BARS: 195.0,
-    VOXEL_FLOODGATE: 240.0,
-    VOXEL_ALARM_BELL: 60.0,
+    VOXEL_SLOPE: 45.0,
+    VOXEL_STAIRS: 45.0,
+    VOXEL_GOLD_BAIT: 68.0,
+    VOXEL_HEAT_BEACON: 250.0,
+    VOXEL_PRESSURE_PLATE: 270.0,
+    VOXEL_IRON_BARS: 290.0,
+    VOXEL_FLOODGATE: 360.0,
+    VOXEL_ALARM_BELL: 90.0,
     VOXEL_FRAGILE_FLOOR: 9.0,
-    VOXEL_PIPE: 150.0,
-    VOXEL_PUMP: 165.0,
-    VOXEL_STEAM_VENT: 18.0,
+    VOXEL_PIPE: 225.0,
+    VOXEL_PUMP: 250.0,
+    VOXEL_STEAM_VENT: 27.0,
+    VOXEL_WATER_SOURCE: float("inf"),
+    VOXEL_WATER_SINK: float("inf"),
+    VOXEL_LAVA_SOURCE: float("inf"),
+    VOXEL_LAVA_SINK: float("inf"),
 }
 
 # Shear strength per voxel type (lateral load capacity)
@@ -806,48 +877,52 @@ VOXEL_TENSILE_STRENGTH = {
 # Shear strength (3× base — lateral loads need deliberate force to cause failure)
 VOXEL_SHEAR_STRENGTH = {
     VOXEL_AIR: 0.0,
-    VOXEL_DIRT: 12.0,
-    VOXEL_STONE: 48.0,
+    VOXEL_DIRT: 18.0,
+    VOXEL_STONE: 72.0,
     VOXEL_BEDROCK: float("inf"),
     VOXEL_CORE: float("inf"),
-    VOXEL_SANDSTONE: 18.0,
-    VOXEL_LIMESTONE: 24.0,
-    VOXEL_SHALE: 13.5,
-    VOXEL_CHALK: 6.0,
-    VOXEL_SLATE: 30.0,
-    VOXEL_MARBLE: 36.0,
-    VOXEL_GNEISS: 33.0,
-    VOXEL_GRANITE: 60.0,
-    VOXEL_BASALT: 54.0,
-    VOXEL_OBSIDIAN: 24.0,
-    VOXEL_IRON_ORE: 39.0,
-    VOXEL_COPPER_ORE: 33.0,
-    VOXEL_GOLD_ORE: 21.0,
+    VOXEL_SANDSTONE: 27.0,
+    VOXEL_LIMESTONE: 36.0,
+    VOXEL_SHALE: 20.0,
+    VOXEL_CHALK: 9.0,
+    VOXEL_SLATE: 45.0,
+    VOXEL_MARBLE: 54.0,
+    VOXEL_GNEISS: 50.0,
+    VOXEL_GRANITE: 90.0,
+    VOXEL_BASALT: 81.0,
+    VOXEL_OBSIDIAN: 36.0,
+    VOXEL_IRON_ORE: 58.0,
+    VOXEL_COPPER_ORE: 50.0,
+    VOXEL_GOLD_ORE: 32.0,
     VOXEL_MANA_CRYSTAL: float("inf"),
     VOXEL_LAVA: 0.0,
     VOXEL_WATER: 0.0,
-    VOXEL_IRON_INGOT: 120.0,
-    VOXEL_COPPER_INGOT: 96.0,
-    VOXEL_GOLD_INGOT: 45.0,
-    VOXEL_ENCHANTED_METAL: 180.0,
-    VOXEL_REINFORCED_WALL: 150.0,
-    VOXEL_SPIKE: 45.0,
-    VOXEL_DOOR: 75.0,
-    VOXEL_TREASURE: 15.0,
-    VOXEL_ROLLING_STONE: 60.0,
+    VOXEL_IRON_INGOT: 180.0,
+    VOXEL_COPPER_INGOT: 144.0,
+    VOXEL_GOLD_INGOT: 68.0,
+    VOXEL_ENCHANTED_METAL: 270.0,
+    VOXEL_REINFORCED_WALL: 225.0,
+    VOXEL_SPIKE: 68.0,
+    VOXEL_DOOR: 112.0,
+    VOXEL_TREASURE: 22.0,
+    VOXEL_ROLLING_STONE: 90.0,
     VOXEL_TARP: 3.0,
-    VOXEL_SLOPE: 36.0,
-    VOXEL_STAIRS: 36.0,
-    VOXEL_GOLD_BAIT: 36.0,
-    VOXEL_HEAT_BEACON: 105.0,
-    VOXEL_PRESSURE_PLATE: 120.0,
-    VOXEL_IRON_BARS: 135.0,
-    VOXEL_FLOODGATE: 180.0,
-    VOXEL_ALARM_BELL: 45.0,
+    VOXEL_SLOPE: 54.0,
+    VOXEL_STAIRS: 54.0,
+    VOXEL_GOLD_BAIT: 54.0,
+    VOXEL_HEAT_BEACON: 158.0,
+    VOXEL_PRESSURE_PLATE: 180.0,
+    VOXEL_IRON_BARS: 200.0,
+    VOXEL_FLOODGATE: 270.0,
+    VOXEL_ALARM_BELL: 68.0,
     VOXEL_FRAGILE_FLOOR: 6.0,
-    VOXEL_PIPE: 90.0,
-    VOXEL_PUMP: 105.0,
-    VOXEL_STEAM_VENT: 24.0,
+    VOXEL_PIPE: 135.0,
+    VOXEL_PUMP: 158.0,
+    VOXEL_STEAM_VENT: 36.0,
+    VOXEL_WATER_SOURCE: float("inf"),
+    VOXEL_WATER_SINK: float("inf"),
+    VOXEL_LAVA_SOURCE: float("inf"),
+    VOXEL_LAVA_SINK: float("inf"),
 }
 
 # Multi-block arch detection
@@ -871,6 +946,15 @@ IMPACT_DAMAGE_FACTOR = 0.5    # Fraction of (fall_distance * weight) applied as 
 
 # Heat convection: humidity movement carries heat
 CONVECTION_RATE = 0.3         # Fraction of humidity flow that carries proportional heat
+
+# Lava flow physics (fluid lava paralleling water)
+LAVA_FLOW_RATE = 0.15            # Lateral leveling rate (water=0.4, lava is viscous)
+MAX_LAVA_FLOW_PER_TICK = 2       # Flow iterations per tick (water=3)
+LAVA_SOURCE_OUTPUT = 255         # Source output level (full)
+LAVA_PRESSURE_WEIGHT = 0.5      # Pressure per depth (water=0.3, lava heavier)
+LAVA_BURST_FACTOR = 1.2         # Wall burst threshold (water=1.5)
+MANA_CRYSTAL_SPAWN_CHANCE = 0.05 # Per source per water tick: chance to spawn a mana crystal
+MANA_LAVA_COLOR = (1.0, 0.35, 0.15, 1.0)  # Rendering tint for lava with mana crystals
 
 # Angle of repose: loose granular materials spread laterally
 # Materials with porosity >= this threshold are considered "granular"
@@ -925,6 +1009,10 @@ VOXEL_CTE = {
     VOXEL_PIPE: 0.003,
     VOXEL_PUMP: 0.003,
     VOXEL_STEAM_VENT: 0.025,         # obsidian-level thermal cycling
+    VOXEL_WATER_SOURCE: 0.0,
+    VOXEL_WATER_SINK: 0.0,
+    VOXEL_LAVA_SOURCE: 0.0,
+    VOXEL_LAVA_SINK: 0.0,
 }
 
 # Thermal stress constants
@@ -980,6 +1068,10 @@ VOXEL_SHOCK_TRANSMIT = {
     VOXEL_PIPE: 0.5,
     VOXEL_PUMP: 0.6,
     VOXEL_STEAM_VENT: 0.8,
+    VOXEL_WATER_SOURCE: 0.0,
+    VOXEL_WATER_SINK: 0.0,
+    VOXEL_LAVA_SOURCE: 0.0,
+    VOXEL_LAVA_SINK: 0.0,
 }
 
 # Brittleness per voxel type (shatter vs crack on impact)
@@ -1028,6 +1120,10 @@ VOXEL_BRITTLENESS = {
     VOXEL_PIPE: 0.08,
     VOXEL_PUMP: 0.05,
     VOXEL_STEAM_VENT: 0.80,         # obsidian-level brittleness
+    VOXEL_WATER_SOURCE: 0.0,
+    VOXEL_WATER_SINK: 0.0,
+    VOXEL_LAVA_SOURCE: 0.0,
+    VOXEL_LAVA_SINK: 0.0,
 }
 
 # Impact cascade constants
@@ -1039,15 +1135,47 @@ MAX_CASCADE_DEPTH = 3             # Max chain reaction levels per tick
 
 # Water physics
 WATER_TICK_INTERVAL = 2           # Run water flow every 2 ticks (responsive)
-WATER_FLOW_RATE = 0.4             # Fraction of water_level transferred per tick laterally
 WATER_SEEP_RATE = 0.02            # Rate at which water seeps through porous solids
 WATER_PRESSURE_WEIGHT = 0.3       # Lateral pressure per unit of water depth
 WATER_BURST_FACTOR = 1.5          # Pressure must exceed shear_strength * factor to burst
 WATER_HUMIDITY_SOURCE = 0.9       # Water blocks set adjacent humidity (scaled by porosity)
 WATER_TEMPERATURE = 20.0          # Default temperature of water blocks
-WATER_EVAPORATION_RATE = 0.01     # Water level loss at surface (z=0) per tick
-MAX_WATER_FLOW_PER_TICK = 3       # Max flow iterations per tick
+WATER_EVAPORATION_RATE = 0.01     # Probability of losing 1 water_level per water tick (surface)
+                                  # Standing pool (255): dries in ~25500 water ticks (~2550s at 20TPS)
+                                  # River with source: source refills 255/tick, evap ~0.01/tick → negligible
 WATER_LAVA_PRODUCT = 32           # VOXEL_OBSIDIAN produced when water meets lava
+PIPE_WATER_TRANSFER_RATE = 0.5    # Water level units transferred through pipes per pump tick
+WATER_BUOYANCY_FACTOR = 0.6       # Weight reduction for submerged blocks (1.0 = full weight, 0.0 = no weight)
+WATER_DAMAGE_DEPTH_THRESHOLD = 3  # Min water depth (cells) before intruder takes damage
+WATER_DAMAGE_PER_TICK = 5         # Damage to intruders submerged in deep water
+WATER_CURRENT_PUSH_THRESHOLD = 1.5  # Velocity magnitude needed to push intruders
+
+# ── Water Flow Model Selection ────────────────────────────────────
+WATER_FLOW_MODEL = "lattice_boltzmann"  # "lattice_boltzmann" | "jacobi_projection"
+
+# Lattice Boltzmann D3Q7 constants (default strategy)
+LBM_TAU = 0.8                # BGK relaxation time (0.5 < tau; higher = more viscous)
+LBM_GRAVITY = 0.003          # Body force per tick (in lattice units)
+LBM_REST_DENSITY = 1.0       # Reference density for equilibrium
+LBM_PRESSURE_DIFFUSION = 1.0 # Lateral transfer rate (fraction of pressure diff → water transfer)
+
+# Jacobi Projection constants (alternative strategy)
+JACOBI_ITERATIONS = 5        # Pressure solve iterations per tick
+JACOBI_GRAVITY = 1.0         # Gravity acceleration per tick
+JACOBI_FRICTION = 0.85       # Velocity damping per tick
+JACOBI_VISCOSITY = 0.02      # Velocity diffusion
+JACOBI_PRESSURE_DIFFUSION = 1.5  # Lateral transfer rate (fraction of pressure diff → water transfer)
+
+# Source/sink physics
+WATER_SOURCE_OUTPUT = 255             # Water level forced on cells adjacent to water source
+LAVA_SOURCE_REGEN = True              # Lava source fills adjacent air/obsidian with lava
+
+# Terrain variation above SURFACE_Z
+TERRAIN_VARIATION_MAX = 3             # Max hill height (blocks above SURFACE_Z ground)
+RIVER_CHANNEL_DEPTH = 2              # Extra blocks carved below river surface level
+TERRAIN_NOISE_SCALE = 24.0            # Noise scale for rolling hills (larger = smoother)
+CAVE_CORE_EXCLUSION = 6              # Min Chebyshev distance from (CORE_X, CORE_Y) for cave centers
+
 
 # ── New Block Gameplay Constants ─────────────────────────────────────
 GOLD_BAIT_INTERACT_TICKS = 10     # Same as treasure grab

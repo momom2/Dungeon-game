@@ -18,14 +18,20 @@ from dungeon_builder.config import (
     GRID_DEPTH,
     GRID_HEIGHT,
     VOXEL_AIR,
+    CORE_X,
+    CORE_Y,
+    CORE_Z,
     CAMERA_DEFAULT_DISTANCE,
     CAMERA_DEFAULT_HEADING,
     CAMERA_DEFAULT_PITCH,
+    DRAG_SELECT_THRESHOLD,
+    DRAG_VERTICAL_SENSITIVITY,
 )
 
 if TYPE_CHECKING:
     from dungeon_builder.core.event_bus import EventBus
     from dungeon_builder.core.game_state import GameState
+    from dungeon_builder.core.keybinding_registry import KeybindingRegistry
     from dungeon_builder.rendering.layer_slice import LayerSliceManager
 
 logger = logging.getLogger("dungeon_builder.camera")
@@ -43,14 +49,16 @@ class CameraController:
         event_bus: EventBus,
         game_state: GameState,
         layer_manager: LayerSliceManager,
+        keybinding_registry: KeybindingRegistry | None = None,
     ) -> None:
         self.app = app
         self.event_bus = event_bus
         self.game_state = game_state
         self.layer_manager = layer_manager
+        self._kb = keybinding_registry
 
         # Camera state
-        self.focus = LPoint3f(GRID_WIDTH / 2, GRID_DEPTH / 2, -1.0)
+        self.focus = LPoint3f(CORE_X + 0.5, CORE_Y + 0.5, -CORE_Z)
         self.distance = CAMERA_DEFAULT_DISTANCE
         self.heading = CAMERA_DEFAULT_HEADING
         self.pitch = CAMERA_DEFAULT_PITCH
@@ -66,40 +74,76 @@ class CameraController:
         self._right_click_start_x = 0.0
         self._right_click_start_y = 0.0
 
+        # Left-click drag-select tracking
+        self._mouse_left_down = False
+        self._left_click_start_x = 0.0
+        self._left_click_start_y = 0.0
+        self._drag_selecting = False
+        self._drag_start_grid: tuple[int, int] | None = None
+        self._drag_current_grid: tuple[int, int] | None = None
+        self._drag_shift_held = False
+        self._drag_z_start = 0
+        self._drag_z_current = 0
+        self._drag_shift_anchor_y = 0.0  # mouse Y when shift pressed
+        self._drag_notified_shift = False
+
         # Hover tracking — last hovered voxel for highlight
         self._hovered_voxel: tuple[int, int, int] | None = None
 
         self._bind_controls()
         self._update_camera()
 
+    def _kb_get(self, action: str, fallback: str) -> str:
+        """Get key for action from registry, or use fallback if no registry."""
+        if self._kb is not None:
+            return self._kb.get(action)
+        return fallback
+
     def _bind_controls(self) -> None:
         app = self.app
-        # Key tracking for continuous input
-        for key in ["w", "a", "s", "d", "q", "e",
-                     "arrow_up", "arrow_down", "arrow_left", "arrow_right"]:
-            self._keys[key] = False
-            app.accept(key, self._set_key, [key, True])
-            app.accept(f"{key}-up", self._set_key, [key, False])
 
-        # Z-level scrolling
-        app.accept("t", self._z_up)
-        app.accept("y", self._z_down)
+        # Continuous-hold keys: bind by action name so _input_task can
+        # check self._keys["camera_pan_forward"] etc.
+        _hold_actions = [
+            ("camera_pan_forward", "w"),
+            ("camera_pan_backward", "s"),
+            ("camera_pan_left", "a"),
+            ("camera_pan_right", "d"),
+            ("camera_rotate_left", "q"),
+            ("camera_rotate_right", "e"),
+            ("camera_pan_forward_alt", "arrow_up"),
+            ("camera_pan_backward_alt", "arrow_down"),
+            ("camera_pan_left_alt", "arrow_left"),
+            ("camera_pan_right_alt", "arrow_right"),
+        ]
+        for action, fallback in _hold_actions:
+            key = self._kb_get(action, fallback)
+            self._keys[action] = False
+            app.accept(key, self._set_key, [action, True])
+            app.accept(f"{key}-up", self._set_key, [action, False])
 
-        # Zoom
+        # Z-level scrolling (one-shot)
+        app.accept(self._kb_get("z_level_up", "t"), self._z_up)
+        app.accept(self._kb_get("z_level_down", "y"), self._z_down)
+
+        # Zoom (mouse — not rebindable)
         app.accept("wheel_up", self._zoom_in)
         app.accept("wheel_down", self._zoom_out)
 
-        # Mouse buttons for rotation/panning
+        # Mouse buttons (not rebindable)
         app.accept("mouse3", self._on_right_down)
         app.accept("mouse3-up", self._on_right_up)
         app.accept("mouse2", self._on_mid_down)
         app.accept("mouse2-up", self._on_mid_up)
+        app.accept("mouse1", self._on_left_down)
+        app.accept("mouse1-up", self._on_left_up)
 
-        # Left click for voxel interaction
-        app.accept("mouse1", self._on_left_click)
+        # Shift tracking for vertical drag-select
+        app.accept("shift", self._on_shift_down)
+        app.accept("shift-up", self._on_shift_up)
 
-        # Tool switching: X key toggles dig/move
-        app.accept("x", self._toggle_tool)
+        # Tool switching (one-shot)
+        app.accept(self._kb_get("toggle_tool", "x"), self._toggle_tool)
 
         # Register continuous input task
         app.taskMgr.add(self._input_task, "camera_input", sort=5)
@@ -120,13 +164,13 @@ class CameraController:
 
         # WASD + Arrow key panning (relative to camera heading)
         move = LVector3f(0, 0, 0)
-        if self._keys.get("w") or self._keys.get("arrow_up"):
+        if self._keys.get("camera_pan_forward") or self._keys.get("camera_pan_forward_alt"):
             move.y += 1
-        if self._keys.get("s") or self._keys.get("arrow_down"):
+        if self._keys.get("camera_pan_backward") or self._keys.get("camera_pan_backward_alt"):
             move.y -= 1
-        if self._keys.get("a") or self._keys.get("arrow_left"):
+        if self._keys.get("camera_pan_left") or self._keys.get("camera_pan_left_alt"):
             move.x -= 1
-        if self._keys.get("d") or self._keys.get("arrow_right"):
+        if self._keys.get("camera_pan_right") or self._keys.get("camera_pan_right_alt"):
             move.x += 1
 
         if move.length_squared() > 0:
@@ -142,9 +186,9 @@ class CameraController:
             self.focus.y += dy * speed
 
         # Q/E rotation
-        if self._keys.get("q"):
+        if self._keys.get("camera_rotate_left"):
             self.heading -= _cfg.CAMERA_ROTATE_SPEED * dt
-        if self._keys.get("e"):
+        if self._keys.get("camera_rotate_right"):
             self.heading += _cfg.CAMERA_ROTATE_SPEED * dt
 
         # Mouse drag rotation / panning
@@ -170,6 +214,63 @@ class CameraController:
 
             self._last_mouse_x = mx
             self._last_mouse_y = my
+
+            # ── Drag-select state machine ──
+            if self._mouse_left_down and not self._drag_selecting:
+                dist = math.hypot(
+                    mx - self._left_click_start_x,
+                    my - self._left_click_start_y,
+                )
+                if dist > DRAG_SELECT_THRESHOLD:
+                    self._drag_selecting = True
+                    # z was already captured in _on_left_down
+
+            if self._drag_selecting:
+                # When Shift is held, only move vertically (freeze XY)
+                if not self._drag_shift_held:
+                    hit = self._ray_hit_layer(
+                        *self._get_mouse_ray()
+                    ) if self._get_mouse_ray() is not None else None
+                    if hit is not None:
+                        self._drag_current_grid = hit
+
+                # Vertical z extension when Shift is held
+                if self._drag_shift_held:
+                    z_offset = int(
+                        (my - self._drag_shift_anchor_y)
+                        / DRAG_VERTICAL_SENSITIVITY
+                    )
+                    # Moving mouse up selects higher (lower z), down selects deeper
+                    self._drag_z_current = max(
+                        0, min(GRID_HEIGHT - 1, self._drag_z_start - z_offset)
+                    )
+                else:
+                    self._drag_z_current = self._drag_z_start
+
+                # Publish preview
+                if (
+                    self._drag_start_grid is not None
+                    and self._drag_current_grid is not None
+                ):
+                    sx, sy = self._drag_start_grid
+                    cx, cy = self._drag_current_grid
+                    z_lo = min(self._drag_z_start, self._drag_z_current)
+                    z_hi = max(self._drag_z_start, self._drag_z_current)
+                    self.event_bus.publish(
+                        "drag_select_preview",
+                        x_min=min(sx, cx), x_max=max(sx, cx),
+                        y_min=min(sy, cy), y_max=max(sy, cy),
+                        z_min=z_lo, z_max=z_hi,
+                    )
+
+                # Shift notification (once per drag)
+                if not self._drag_shift_held and not self._drag_notified_shift:
+                    self._drag_notified_shift = True
+                    self.event_bus.publish(
+                        "error_message",
+                        text="Hold Shift to select vertically",
+                        color=(0.7, 0.7, 0.9, 1),
+                    )
 
         self._update_camera()
         self._update_hover()
@@ -261,6 +362,76 @@ class CameraController:
             self.game_state.build_mode = "dig"
         self.event_bus.publish("tool_changed", mode=self.game_state.build_mode)
 
+    def _on_left_down(self) -> None:
+        """Handle left mouse button press: begin potential drag-select."""
+        if self.game_state.menu_open:
+            return
+        if self.game_state.craft_mode_active:
+            # In craft mode, clicks are immediate (no drag-select)
+            self._on_left_click()
+            return
+
+        self._mouse_left_down = True
+        self._drag_selecting = False
+        self._drag_notified_shift = False
+        if self.app.mouseWatcherNode.has_mouse():
+            self._left_click_start_x = self.app.mouseWatcherNode.get_mouse_x()
+            self._left_click_start_y = self.app.mouseWatcherNode.get_mouse_y()
+
+        # Record grid position AND z-level at press time (not at threshold)
+        # so that drag-select z matches single-click z exactly.
+        self._drag_z_start = self.layer_manager.current_z
+        self._drag_z_current = self._drag_z_start
+        ray = self._get_mouse_ray()
+        if ray is not None:
+            hit = self._ray_hit_layer(*ray)
+            self._drag_start_grid = hit
+            self._drag_current_grid = hit
+
+    def _on_left_up(self) -> None:
+        """Handle left mouse button release: finish drag or single-click."""
+        if not self._mouse_left_down:
+            return
+        self._mouse_left_down = False
+
+        if self._drag_selecting:
+            # Finish drag-select: publish area and clear
+            if (
+                self._drag_start_grid is not None
+                and self._drag_current_grid is not None
+            ):
+                sx, sy = self._drag_start_grid
+                cx, cy = self._drag_current_grid
+                z_lo = min(self._drag_z_start, self._drag_z_current)
+                z_hi = max(self._drag_z_start, self._drag_z_current)
+                self.event_bus.publish(
+                    "drag_dig_area",
+                    x_min=min(sx, cx), x_max=max(sx, cx),
+                    y_min=min(sy, cy), y_max=max(sy, cy),
+                    z_min=z_lo, z_max=z_hi,
+                )
+            self.event_bus.publish("drag_select_cleared")
+            self._drag_selecting = False
+            self._drag_start_grid = None
+            self._drag_current_grid = None
+            return
+
+        # Was a single click — dispatch normally
+        self._on_left_click()
+
+    def _on_shift_down(self) -> None:
+        """Handle Shift press for vertical drag extension."""
+        self._drag_shift_held = True
+        if self._drag_selecting and self.app.mouseWatcherNode.has_mouse():
+            self._drag_shift_anchor_y = self.app.mouseWatcherNode.get_mouse_y()
+
+    def _on_shift_up(self) -> None:
+        """Handle Shift release."""
+        self._drag_shift_held = False
+        if self._drag_selecting:
+            # Reset to single z-level when shift released
+            self._drag_z_current = self._drag_z_start
+
     def _on_left_click(self) -> None:
         """Handle left-click: pick a voxel and dispatch action."""
         if self.game_state.menu_open:
@@ -287,10 +458,13 @@ class CameraController:
                 vx, vy, vz = hit
                 grid = self.game_state.voxel_grid
                 if grid is not None and not grid.is_visible(vx, vy, vz):
-                    # Treat as dig click on invisible block (pending dig)
-                    self.event_bus.publish(
-                        "voxel_left_clicked", x=vx, y=vy, z=vz, mode="dig"
-                    )
+                    # Target the solid block below the air (z+1 is deeper)
+                    target_z = vz + 1
+                    if grid.in_bounds(vx, vy, target_z):
+                        self.event_bus.publish(
+                            "voxel_left_clicked", x=vx, y=vy, z=target_z,
+                            mode="dig",
+                        )
             return
 
         vx, vy, vz = hit
