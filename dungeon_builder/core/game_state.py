@@ -1,4 +1,10 @@
-"""Central game state container. Holds references to all subsystems."""
+"""Central game state container. Holds references to all subsystems.
+
+Dependencies: (none at runtime — TYPE_CHECKING only)
+Dependents: main, building.build_system, building.move_system, building.crafting_system,
+    rendering.camera, ui.hud, ui.main_menu, ui.crafting_book_panel,
+    tests/building/, tests/core/test_game_state.py
+"""
 
 from __future__ import annotations
 

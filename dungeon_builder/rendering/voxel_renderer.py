@@ -1,4 +1,10 @@
-"""Chunk-based voxel mesh generation and rendering using Panda3D GeomNode."""
+"""Chunk-based voxel mesh generation and rendering using Panda3D GeomNode.
+
+Dependencies: config (voxel constants, colors, render modes),
+             building.build_system (dig state), world.voxel_grid,
+             rendering.layer_slice
+Dependents: main (wiring), tests/rendering/test_voxel_renderer.py
+"""
 
 from __future__ import annotations
 
@@ -13,7 +19,6 @@ from panda3d.core import (
     GeomVertexFormat,
     GeomVertexWriter,
     NodePath,
-    LVector4f,
 )
 
 import dungeon_builder.config as _cfg
@@ -21,7 +26,6 @@ from dungeon_builder.config import (
     CHUNK_SIZE,
     VOXEL_AIR,
     VOXEL_WATER,
-    VOXEL_LAVA,
     VOXEL_COLORS,
     VOXEL_DOOR,
     VOXEL_FLOODGATE,
@@ -29,7 +33,6 @@ from dungeon_builder.config import (
     VOXEL_STEAM_VENT,
     VOXEL_NOISE,
     VERTEX_NOISE_AMPLITUDE,
-    GRID_HEIGHT,
     RENDER_MODE_MATTER,
     RENDER_MODE_HUMIDITY,
     RENDER_MODE_HEAT,
@@ -110,6 +113,24 @@ def _vertex_noise(
         h ^= v & 0xFFFFFFFF
         h = (h * 16777619) & 0xFFFFFFFF
     return (h / 2147483647.0) - 1.0
+
+
+def _lerp_color(
+    base: tuple[float, float, float, float],
+    target: tuple[float, ...],
+    t: float,
+) -> tuple[float, float, float, float]:
+    """Linearly interpolate from *base* toward *target* by factor *t*.
+
+    *target* may be an RGB 3-tuple (alpha preserved from *base*) or an
+    RGBA 4-tuple.
+    """
+    return (
+        base[0] * (1 - t) + target[0] * t,
+        base[1] * (1 - t) + target[1] * t,
+        base[2] * (1 - t) + target[2] * t,
+        base[3],
+    )
 
 
 def humidity_to_color(
@@ -429,14 +450,7 @@ class ChunkMeshBuilder:
         # Exception: pending digs show dim gold even through fog
         if not voxel_grid.is_visible(x, y, z):
             if build_system is not None and build_system.is_pending_dig(x, y, z):
-                t = 0.25
-                fog = _cfg.FOG_COLOR
-                return (
-                    fog[0] * (1 - t) + 0.8 * t,
-                    fog[1] * (1 - t) + 0.65 * t,
-                    fog[2] * (1 - t) + 0.0 * t,
-                    fog[3],
-                )
+                return _lerp_color(_cfg.FOG_COLOR, (0.8, 0.65, 0.0), 0.25)
             return _cfg.FOG_COLOR
 
         if render_mode == RENDER_MODE_STRUCTURAL:
@@ -494,47 +508,25 @@ class ChunkMeshBuilder:
             mt = voxel_grid.get_metal_type(x, y, z)
             base_mt = mt & 0x7F  # strip enchanted bit
             if base_mt in METAL_COLORS:
-                tint = METAL_COLORS[base_mt]
-                # Blend 40% toward the metal color
-                t = 0.4
-                br = base[0] * (1 - t) + tint[0] * t
-                bg = base[1] * (1 - t) + tint[1] * t
-                bb = base[2] * (1 - t) + tint[2] * t
-                base = (br, bg, bb, base[3])
+                base = _lerp_color(base, METAL_COLORS[base_mt], 0.4)
             # Enchanted blocks get a purple shimmer
             if mt & ENCHANTED_OFFSET:
-                t = 0.15
-                br = base[0] * (1 - t) + 0.6 * t
-                bg = base[1] * (1 - t) + 0.2 * t
-                bb = base[2] * (1 - t) + 0.9 * t
-                base = (br, bg, bb, base[3])
+                base = _lerp_color(base, (0.6, 0.2, 0.9), 0.15)
 
         # Golden overlay for blocks being dug
         if is_dig:
             progress = build_system.get_dig_progress(x, y, z)
-            # Blend from gold (queued) to brighter gold (near complete)
-            # Gold: (1.0, 0.85, 0.0) — lerp from base toward gold
-            t = 0.4 + 0.3 * max(0.0, progress)  # 0.4 blend at start, 0.7 near done
-            r = base[0] * (1 - t) + 1.0 * t
-            g = base[1] * (1 - t) + 0.85 * t
-            b = base[2] * (1 - t) + 0.0 * t
-            return (r, g, b, base[3])
+            # 0.4 blend at start, 0.7 near done
+            t = 0.4 + 0.3 * max(0.0, progress)
+            return _lerp_color(base, (1.0, 0.85, 0.0), t)
 
         # Green overlay for craft-valid positions (solid blocks)
         if craft_highlights is not None and (x, y, z) in craft_highlights:
-            t = 0.45
-            r = base[0] * (1 - t) + 0.2 * t
-            g = base[1] * (1 - t) + 1.0 * t
-            b = base[2] * (1 - t) + 0.3 * t
-            return (r, g, b, base[3])
+            return _lerp_color(base, (0.2, 1.0, 0.3), 0.45)
 
         # Cyan overlay for ingredient highlights (temporary, from crafting panel)
         if ingredient_highlights is not None and (x, y, z) in ingredient_highlights:
-            t = 0.5
-            r = base[0] * (1 - t) + 0.3 * t
-            g = base[1] * (1 - t) + 0.9 * t
-            b = base[2] * (1 - t) + 1.0 * t
-            return (r, g, b, base[3])
+            return _lerp_color(base, (0.3, 0.9, 1.0), 0.5)
 
         # Open doors and open floodgates are semi-transparent
         if vtype == VOXEL_DOOR and voxel_grid.get_block_state(x, y, z) == 0:
@@ -556,12 +548,9 @@ class ChunkMeshBuilder:
             mana_count = voxel_grid.get_mana_crystals(x, y, z)
             if mana_count >= 1:
                 # Tint toward MANA_LAVA_COLOR (orange-magenta)
-                mc = _cfg.MANA_LAVA_COLOR
                 t = min(0.5, mana_count * 0.15)
-                r = base[0] * (1 - t) + mc[0] * t
-                g = base[1] * (1 - t) + mc[1] * t
-                b = base[2] * (1 - t) + mc[2] * t
-                return (r, g, b, alpha)
+                tinted = _lerp_color(base, _cfg.MANA_LAVA_COLOR, t)
+                return (tinted[0], tinted[1], tinted[2], alpha)
             return (base[0], base[1], base[2], alpha)
         # Steam vent: slight transparency
         if vtype == VOXEL_STEAM_VENT:

@@ -1,4 +1,8 @@
-"""Tests for dungeon_builder.intruders.reputation — dungeon reputation system."""
+"""Tests for dungeon_builder.intruders.reputation -- dungeon reputation system.
+
+Dependencies: intruders.reputation, core.event_bus, config
+Dependents: (none)
+"""
 
 import pytest
 
@@ -59,7 +63,7 @@ class TestDungeonReputationBasics:
         bus.publish("intruder_died", intruder=None)
         bus.publish("intruder_escaped", intruder=None)
         bus.publish("intruder_collected_treasure")
-        # No assertion needed — we just verify no exceptions
+        # No assertion needed -- we just verify no exceptions
 
 
 # ---------- Counter tracking ----------
@@ -180,8 +184,17 @@ class TestModifierOutputs:
     def test_template_weight_modifier_deadly(self):
         _, rep = self._make_deadly_rep()
         mods = rep.get_template_weight_modifier()
-        assert "Siege Force" in mods
-        assert mods["Siege Force"] > 0
+        assert "Siege Company" in mods
+        assert mods["Siege Company"] > 0
+
+    def test_template_weight_modifier_deadly_has_new_names(self):
+        """Template weight modifier uses new template names."""
+        _, rep = self._make_deadly_rep()
+        mods = rep.get_template_weight_modifier()
+        # Should use new names: "Siege Company", "War Party", "Scouting Band"
+        assert "Siege Company" in mods
+        assert "War Party" in mods
+        assert "Scouting Band" in mods
 
     def test_loyalty_modifier_deadly(self):
         _, rep = self._make_deadly_rep()
@@ -197,6 +210,23 @@ class TestModifierOutputs:
         assert profile.lethality > 0.5
         shift = rep.get_level_shift()
         assert shift > 0.0
+
+
+# ---------- get_dominant_threat ----------
+
+
+class TestDominantThreat:
+    def test_get_dominant_threat_returns_unknown(self):
+        """get_dominant_threat() returns 'unknown' as stub."""
+        _, rep = _make_reputation()
+        assert rep.get_dominant_threat() == "unknown"
+
+    def test_get_dominant_threat_still_unknown_after_events(self):
+        """Even after many events, stub still returns 'unknown'."""
+        bus, rep = _make_reputation()
+        for _ in range(20):
+            bus.publish("intruder_died", intruder=None)
+        assert rep.get_dominant_threat() == "unknown"
 
 
 # ---------- Event publishing ----------

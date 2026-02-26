@@ -11,6 +11,11 @@ transports discrete mana crystals probabilistically.
 Water level is tracked per-voxel as uint8 (0-255); lava_level likewise.
 A voxel is typed VOXEL_WATER when water_level > 0 and VOXEL_LAVA when
 lava_level > 0.  When levels reach 0, voxels revert to VOXEL_AIR.
+
+Dependencies: config, world.physics.water_flow_strategies, core.event_bus,
+    world.voxel_grid
+Dependents: main (wiring), tests/physics/test_water.py,
+    tests/physics/test_water_sources.py, tests/physics/test_lava_flow.py
 """
 
 from __future__ import annotations
@@ -39,14 +44,12 @@ from dungeon_builder.config import (
     WATER_PRESSURE_WEIGHT,
     WATER_BURST_FACTOR,
     WATER_HUMIDITY_SOURCE,
-    WATER_TEMPERATURE,
     WATER_EVAPORATION_RATE,
     WATER_LAVA_PRODUCT,
     WATER_SOURCE_OUTPUT,
     LAVA_TEMPERATURE,
     MAX_CASCADE_PER_TICK,
     METAL_STRENGTH_MULT,
-    ENCHANTED_OFFSET,
     LAVA_FLOW_RATE,
     MAX_LAVA_FLOW_PER_TICK,
     LAVA_SOURCE_OUTPUT,
@@ -938,30 +941,6 @@ class WaterPhysics:
             ntype = int(voxels[nx, ny, nz])
             if ntype != VOXEL_LAVA and ntype != VOXEL_WATER:
                 hum[nx, ny, nz] = max(float(hum[nx, ny, nz]), WATER_HUMIDITY_SOURCE)
-
-    def _generate_steam(self, source_mask: np.ndarray) -> None:
-        """Set high humidity on blocks adjacent to steam source positions."""
-        grid = self.voxel_grid
-        voxels = grid.grid
-        hum = grid.humidity
-        w, d, h = grid.width, grid.depth, grid.height
-
-        adj = np.zeros((w, d, h), dtype=np.bool_)
-        if w > 1:
-            adj[1:, :, :] |= source_mask[:-1, :, :]
-            adj[:-1, :, :] |= source_mask[1:, :, :]
-        if d > 1:
-            adj[:, 1:, :] |= source_mask[:, :-1, :]
-            adj[:, :-1, :] |= source_mask[:, 1:, :]
-        if h > 1:
-            adj[:, :, 1:] |= source_mask[:, :, :-1]
-            adj[:, :, :-1] |= source_mask[:, :, 1:]
-
-        receives_steam = adj & (voxels != VOXEL_LAVA) & (voxels != VOXEL_WATER)
-        if np.any(receives_steam):
-            hum[receives_steam] = np.maximum(
-                hum[receives_steam], WATER_HUMIDITY_SOURCE
-            )
 
     # ------------------------------------------------------------------
     # Surface evaporation

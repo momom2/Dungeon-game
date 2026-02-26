@@ -1,4 +1,9 @@
-"""Dropdown menu for switching between render modes (matter/humidity/heat)."""
+"""Dropdown menu for switching between render modes (matter/humidity/heat).
+
+Dependencies: config, core.event_bus, core.keybinding_registry,
+    rendering.voxel_renderer
+Dependents: main (wiring), tests/ui/test_render_mode_selector.py
+"""
 
 from __future__ import annotations
 

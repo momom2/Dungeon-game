@@ -1,7 +1,5 @@
 """Tests for auto-bag: dug blocks go directly into the player's bag."""
 
-import inspect
-
 import pytest
 
 from dungeon_builder.core.event_bus import EventBus
@@ -122,12 +120,23 @@ class TestAutoBag:
         finally:
             _cfg.AUTO_BAG_DIG = old
 
-    def test_auto_bag_source_references_config(self):
-        """_on_dig_complete_auto_bag should check AUTO_BAG_DIG from config."""
-        source = inspect.getsource(BuildSystem._on_dig_complete_auto_bag)
-        assert "AUTO_BAG_DIG" in source
+    def test_auto_bag_respects_config_toggle(self):
+        """AUTO_BAG_DIG=True picks up; False leaves loose (config-driven)."""
+        # Enabled: block picked up
+        bus_on, grid_on, gs_on, bs_on, ms_on, old_on = _make_auto_bag_env(auto_bag=True)
+        try:
+            bs_on.queue_dig(2, 2, 1)
+            _complete_dig(bus_on, VOXEL_DIRT)
+            assert ms_on.get_count(VOXEL_DIRT) == 1
+        finally:
+            _cfg.AUTO_BAG_DIG = old_on
 
-    def test_auto_bag_source_calls_pick_up(self):
-        """_on_dig_complete_auto_bag should call move_system.pick_up."""
-        source = inspect.getsource(BuildSystem._on_dig_complete_auto_bag)
-        assert "pick_up" in source
+        # Disabled: block stays loose
+        bus_off, grid_off, gs_off, bs_off, ms_off, old_off = _make_auto_bag_env(auto_bag=False)
+        try:
+            bs_off.queue_dig(2, 2, 1)
+            _complete_dig(bus_off, VOXEL_DIRT)
+            assert ms_off.get_count(VOXEL_DIRT) == 0
+            assert grid_off.is_loose(2, 2, 1)
+        finally:
+            _cfg.AUTO_BAG_DIG = old_off

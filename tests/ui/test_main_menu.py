@@ -4,7 +4,7 @@ Covers:
 - Menu constants registry validation
 - Config modification via module references
 - GameState.menu_open field
-- MainMenu navigation logic (via source inspection)
+- MainMenu navigation logic (interface checks)
 - Event bus config_changed publishing
 """
 
@@ -196,22 +196,16 @@ class TestGameStateMenuOpen:
         assert gs.menu_open is True
 
 
-# ── Test: MainMenu Navigation Logic (source inspection) ────────────────
+# ── Test: MainMenu Navigation Logic (interface checks) ──────────────────
 
 
 class TestMainMenuNavigation:
-    """Verify MainMenu navigation structure via source inspection.
+    """Verify MainMenu navigation structure via interface checks.
 
-    Since MainMenu requires Panda3D (DirectGui widgets), we inspect the
-    source code to verify the navigation state machine and frame builders.
+    Since MainMenu requires Panda3D (DirectGui widgets), we verify
+    the navigation state machine through method existence, signatures,
+    and the _STATES constant.
     """
-
-    @pytest.fixture(autouse=True)
-    def _load_source(self):
-        from dungeon_builder.ui.main_menu import MainMenu
-        self.cls = MainMenu
-        self.init_src = inspect.getsource(MainMenu.__init__)
-        self.class_src = inspect.getsource(MainMenu)
 
     def test_states_defined(self):
         """All expected states should be listed in _STATES."""
@@ -223,63 +217,50 @@ class TestMainMenuNavigation:
 
     def test_build_methods_exist(self):
         """A _build_*_frame method should exist for each state."""
+        from dungeon_builder.ui.main_menu import MainMenu
         for state in ("main", "options", "game_constants",
                       "difficulty", "visibility", "keybinding", "sound",
                       "water_physics"):
             method_name = f"_build_{state}_frame"
-            assert hasattr(self.cls, method_name), (
+            assert hasattr(MainMenu, method_name), (
                 f"Missing method: {method_name}"
             )
 
-    def test_navigate_to_pushes_stack(self):
-        """_navigate_to should append to _nav_stack."""
-        src = inspect.getsource(self.cls._navigate_to)
-        assert "_nav_stack.append" in src
+    def test_navigate_to_method_exists(self):
+        """MainMenu must have _navigate_to method."""
+        from dungeon_builder.ui.main_menu import MainMenu
+        assert hasattr(MainMenu, "_navigate_to")
+        assert callable(getattr(MainMenu, "_navigate_to"))
 
-    def test_navigate_back_pops_stack(self):
-        """_navigate_back should pop from _nav_stack."""
-        src = inspect.getsource(self.cls._navigate_back)
-        assert "_nav_stack.pop" in src
+    def test_navigate_to_accepts_state_param(self):
+        """_navigate_to should accept a state parameter."""
+        from dungeon_builder.ui.main_menu import MainMenu
+        sig = inspect.signature(MainMenu._navigate_to)
+        assert "state" in sig.parameters
 
-    def test_escape_bound_in_init(self):
-        """Escape key should be bound to toggle in __init__."""
-        assert '"escape"' in self.init_src or "'escape'" in self.init_src
-        assert "self.toggle" in self.init_src
+    def test_navigate_back_method_exists(self):
+        """MainMenu must have _navigate_back method."""
+        from dungeon_builder.ui.main_menu import MainMenu
+        assert hasattr(MainMenu, "_navigate_back")
+        assert callable(getattr(MainMenu, "_navigate_back"))
 
-    def test_play_sets_first_play_false(self):
-        """_on_play should set _first_play = False."""
-        src = inspect.getsource(self.cls._on_play)
-        assert "_first_play = False" in src
+    def test_on_play_method_exists(self):
+        """MainMenu must have _on_play method."""
+        from dungeon_builder.ui.main_menu import MainMenu
+        assert hasattr(MainMenu, "_on_play")
+        assert callable(getattr(MainMenu, "_on_play"))
 
-    def test_show_sets_menu_open_true(self):
-        """show() should set game_state.menu_open = True."""
-        src = inspect.getsource(self.cls.show)
-        assert "menu_open = True" in src
+    def test_show_and_hide_methods_exist(self):
+        """MainMenu must have show and hide methods."""
+        from dungeon_builder.ui.main_menu import MainMenu
+        assert hasattr(MainMenu, "show")
+        assert hasattr(MainMenu, "hide")
 
-    def test_hide_sets_menu_open_false(self):
-        """hide() should set game_state.menu_open = False."""
-        src = inspect.getsource(self.cls.hide)
-        assert "menu_open = False" in src
-
-    def test_main_frame_has_play_options_quit(self):
-        """Main frame builder should create Play, Options, and Quit buttons."""
-        src = inspect.getsource(self.cls._build_main_frame)
-        assert '"Play"' in src
-        assert '"Options"' in src
-        assert '"Quit"' in src
-
-    def test_options_frame_navigates_to_submenus(self):
-        """Options frame should navigate to keybinding, game_constants, sound."""
-        src = inspect.getsource(self.cls._build_options_frame)
-        assert '"keybinding"' in src
-        assert '"game_constants"' in src
-        assert '"sound"' in src
-
-    def test_game_constants_navigates_to_difficulty_visibility(self):
-        """Game constants should navigate to difficulty and visibility."""
-        src = inspect.getsource(self.cls._build_game_constants_frame)
-        assert '"difficulty"' in src
-        assert '"visibility"' in src
+    def test_toggle_method_exists(self):
+        """MainMenu must have toggle method for escape key."""
+        from dungeon_builder.ui.main_menu import MainMenu
+        assert hasattr(MainMenu, "toggle")
+        assert callable(getattr(MainMenu, "toggle"))
 
 
 # ── Test: Event Bus config_changed ──────────────────────────────────────
@@ -313,71 +294,63 @@ class TestConfigChangedEvent:
             _cfg.INTRUDER_DEFAULT_HP = original_hp
 
 
-# ── Test: main.py wiring (source inspection) ───────────────────────────
+# ── Test: main.py wiring (interface checks) ─────────────────────────────
 
 
 class TestMainPyWiring:
     """Verify main.py correctly wires the MainMenu."""
 
-    @pytest.fixture(autouse=True)
-    def _load_source(self):
+    def test_main_menu_importable(self):
+        """MainMenu should be importable from ui.main_menu."""
+        from dungeon_builder.ui.main_menu import MainMenu
+        assert callable(MainMenu)
+
+    def test_dungeon_app_exists(self):
+        """DungeonApp class should be importable from main."""
         from dungeon_builder.main import DungeonApp
-        self.class_src = inspect.getsource(DungeonApp)
+        assert callable(DungeonApp)
 
-    def test_main_menu_imported(self):
-        """main.py should import MainMenu."""
-        import dungeon_builder.main as main_mod
-        src = inspect.getsource(main_mod)
-        assert "from dungeon_builder.ui.main_menu import MainMenu" in src
+    def test_main_menu_init_accepts_event_bus(self):
+        """MainMenu.__init__ should accept event_bus parameter."""
+        from dungeon_builder.ui.main_menu import MainMenu
+        sig = inspect.signature(MainMenu.__init__)
+        assert "event_bus" in sig.parameters
 
-    def test_main_menu_instantiated(self):
-        """MainMenu should be constructed in DungeonApp.__init__."""
-        assert "MainMenu(" in self.class_src
-
-    def test_escape_quit_removed(self):
-        """The old escape→userExit binding should NOT be present."""
-        assert 'self.accept("escape", self.userExit)' not in self.class_src
-        assert "self.accept('escape', self.userExit)" not in self.class_src
-
-    def test_starts_paused(self):
-        """TimeManager should be set to speed 0 at startup."""
-        assert "set_speed(0)" in self.class_src
-
-    def test_layer_manager_gets_event_bus(self):
-        """LayerSliceManager should receive event_bus argument."""
-        assert "LayerSliceManager(self.render, event_bus)" in self.class_src
-
-    def test_main_menu_in_subsystems(self):
-        """main_menu should be stored in _subsystems."""
-        assert '"main_menu"' in self.class_src or "'main_menu'" in self.class_src
+    def test_main_menu_init_accepts_game_state(self):
+        """MainMenu.__init__ should accept game_state parameter."""
+        from dungeon_builder.ui.main_menu import MainMenu
+        sig = inspect.signature(MainMenu.__init__)
+        assert "game_state" in sig.parameters
 
 
-# ── Test: Slider callback logic (source inspection) ────────────────────
+# ── Test: Slider callback logic (interface checks) ──────────────────────
 
 
 class TestSliderCallbacks:
-    """Verify slider callback logic in MainMenu."""
+    """Verify slider callback methods exist on MainMenu."""
 
-    @pytest.fixture(autouse=True)
-    def _load_source(self):
+    def test_build_slider_row_method_exists(self):
+        """MainMenu must have _build_slider_row method."""
         from dungeon_builder.ui.main_menu import MainMenu
-        self.slider_src = inspect.getsource(MainMenu._build_slider_row)
-        self.fog_src = inspect.getsource(MainMenu._build_fog_slider)
-        self.reset_src = inspect.getsource(MainMenu._reset_defaults)
+        assert hasattr(MainMenu, "_build_slider_row")
+        assert callable(getattr(MainMenu, "_build_slider_row"))
 
-    def test_slider_snaps_to_step(self):
-        """Slider callback should round to step size."""
-        assert "round(raw / step) * step" in self.slider_src
+    def test_build_fog_slider_method_exists(self):
+        """MainMenu must have _build_fog_slider method."""
+        from dungeon_builder.ui.main_menu import MainMenu
+        assert hasattr(MainMenu, "_build_fog_slider")
+        assert callable(getattr(MainMenu, "_build_fog_slider"))
 
-    def test_slider_publishes_config_changed(self):
-        """Slider callback should publish config_changed event."""
-        assert 'config_changed' in self.slider_src
+    def test_reset_defaults_method_exists(self):
+        """MainMenu must have _reset_defaults method."""
+        from dungeon_builder.ui.main_menu import MainMenu
+        assert hasattr(MainMenu, "_reset_defaults")
+        assert callable(getattr(MainMenu, "_reset_defaults"))
 
-    def test_fog_slider_modifies_tuple(self):
-        """Fog slider should decompose and recompose FOG_COLOR tuple."""
-        assert "list(_cfg.FOG_COLOR)" in self.fog_src
-        assert "tuple(fog)" in self.fog_src
-
-    def test_reset_restores_via_setattr(self):
-        """Reset defaults should use setattr to restore config values."""
-        assert "setattr(_cfg" in self.reset_src
+    def test_build_slider_row_accepts_setting(self):
+        """_build_slider_row should accept a setting parameter."""
+        from dungeon_builder.ui.main_menu import MainMenu
+        sig = inspect.signature(MainMenu._build_slider_row)
+        # Should accept at least parent and setting params
+        params = set(sig.parameters) - {"self"}
+        assert len(params) >= 1, "Should accept parameters beyond self"

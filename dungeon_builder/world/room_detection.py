@@ -1,4 +1,9 @@
-"""Dynamic room recognition from voxel layout via BFS flood fill."""
+"""Dynamic room recognition from voxel layout via BFS flood fill.
+
+Dependencies: config, core.event_bus, world.voxel_grid
+Dependents: main (disabled — see main.py docstring),
+    tests/world/test_room_detection.py
+"""
 
 from __future__ import annotations
 

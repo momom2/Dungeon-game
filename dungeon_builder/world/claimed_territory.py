@@ -8,6 +8,10 @@ claimed territory are marked as "visible" (for fog-of-war rendering).
 
 Follows the same iterative NumPy dilation pattern as
 ``GravityPhysics._check_connectivity()`` in ``gravity.py``.
+
+Dependencies: config, core.event_bus, world.voxel_grid
+Dependents: main (wiring), tests/world/test_claimed_territory.py,
+    tests/world/test_core_placement.py
 """
 
 from __future__ import annotations

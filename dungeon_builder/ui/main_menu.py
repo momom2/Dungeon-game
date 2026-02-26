@@ -3,6 +3,10 @@
 Appears on startup and when the player presses Escape during gameplay.
 The game pauses while the menu is open.  Options submenus allow runtime
 modification of game constants via sliders.
+
+Dependencies: config, core.event_bus, core.game_state,
+    core.keybinding_registry, ui.menu_constants, ui.style
+Dependents: main (wiring), tests/ui/test_main_menu.py
 """
 
 from __future__ import annotations
@@ -41,17 +45,18 @@ if TYPE_CHECKING:
     from dungeon_builder.core.event_bus import EventBus
     from dungeon_builder.core.game_state import GameState
 
-logger = logging.getLogger("dungeon_builder.ui")
+from dungeon_builder.ui.style import (
+    BG_COLOR as _BG_COLOR,
+    TITLE_COLOR as _TITLE_COLOR,
+    TEXT_COLOR as _TEXT_COLOR,
+    MUTED_COLOR as _MUTED_COLOR,
+    BUTTON_FG as _BUTTON_FG,
+    BUTTON_BG as _BUTTON_BG,
+    BUTTON_SIZE as _BUTTON_SIZE,
+    MENU_SORT_ORDER as _SORT_ORDER,
+)
 
-# ── Style constants (matching existing HUD/CraftingBookPanel) ────────────
-_BG_COLOR = (0.05, 0.05, 0.1, 0.92)
-_TITLE_COLOR = (0.9, 0.8, 0.4, 1)
-_TEXT_COLOR = (0.9, 0.9, 0.9, 1)
-_MUTED_COLOR = (0.5, 0.5, 0.55, 1)
-_BUTTON_FG = (0.9, 0.9, 0.9, 1)
-_BUTTON_BG = (0.15, 0.15, 0.2, 0.9)
-_BUTTON_SIZE = (-0.3, 0.3, -0.045, 0.055)
-_SORT_ORDER = 100  # Above everything else
+logger = logging.getLogger("dungeon_builder.ui")
 
 # Menu states
 _STATES = (

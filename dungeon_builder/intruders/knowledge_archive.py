@@ -1,9 +1,14 @@
-"""Persistent per-faction knowledge archive with uncertainty tracking.
+"""Persistent knowledge archive with uncertainty tracking.
 
-Escaped intruders archive their personal maps into a faction-level knowledge pool.
+Escaped intruders archive their personal maps into a shared knowledge pool.
 New parties receive this archived knowledge at spawn time (filtered by staleness
 and uncertainty). Contradictory reports increase uncertainty; confirmations decrease
 it. Player modifications to the dungeon also increase uncertainty in archived cells.
+
+Dependencies: config, intruders.agent, intruders.archetypes,
+    intruders.personal_map
+Dependents: intruders.decision, tests/intruders/test_knowledge_archive.py,
+    tests/intruders/test_social_dynamics.py
 """
 
 from __future__ import annotations
@@ -51,19 +56,15 @@ class FactionMap:
 
 
 class KnowledgeArchive:
-    """Persistent knowledge archive for both surface and underworld factions.
+    """Persistent knowledge archive shared by all intruder factions.
 
     Pure Python, no Panda3D dependency — fully testable without a window.
     """
 
-    __slots__ = ("_surface_data", "_underworld_data")
+    __slots__ = ("_data",)
 
     def __init__(self) -> None:
-        self._surface_data = FactionMap()
-        self._underworld_data = FactionMap()
-
-    def _get_faction(self, is_underworlder: bool) -> FactionMap:
-        return self._underworld_data if is_underworlder else self._surface_data
+        self._data = FactionMap()
 
     def archive_survivor(self, intruder: Intruder, tick: int) -> None:
         """Archive an escaped intruder's personal map into the faction archive.
@@ -81,7 +82,7 @@ class KnowledgeArchive:
         """
         from dungeon_builder.intruders.archetypes import STATUS_TRUST
 
-        faction = self._get_faction(intruder.is_underworlder)
+        faction = self._data
         pmap = intruder.personal_map
         survivor_trust = STATUS_TRUST.get(intruder.status, 0.5)
 
@@ -130,11 +131,10 @@ class KnowledgeArchive:
     def inject_knowledge(
         self,
         personal_map: PersonalMap,
-        is_underworlder: bool,
         current_tick: int,
         cunning: float,
     ) -> None:
-        """Inject faction knowledge into a new intruder's personal map.
+        """Inject archived knowledge into a new intruder's personal map.
 
         Filters by staleness and uncertainty (adjusted by intruder's cunning).
         Risk-averse intruders (high cunning) trust less data and prefer to
@@ -144,15 +144,13 @@ class KnowledgeArchive:
         ----------
         personal_map : PersonalMap
             The new intruder's (empty) personal map to populate.
-        is_underworlder : bool
-            Which faction's archive to read from.
         current_tick : int
             Current game tick for staleness check.
         cunning : float
             The intruder's cunning stat (0.0-1.0). Higher cunning = lower
             uncertainty threshold = trusts less archived data.
         """
-        faction = self._get_faction(is_underworlder)
+        faction = self._data
 
         if not faction.seen:
             return
@@ -179,28 +177,23 @@ class KnowledgeArchive:
         """Increase uncertainty when the player modifies a cell.
 
         Called when any voxel changes type (dig, build, craft).
-        Affects both faction archives since player actions are visible
-        to any faction that has seen that cell.
         """
         pos = (x, y, z)
-        for faction in (self._surface_data, self._underworld_data):
-            if pos in faction.seen:
-                old_unc = faction.uncertainty.get(pos, 0.0)
-                faction.uncertainty[pos] = min(1.0, old_unc + KNOWLEDGE_CHANGE_UNCERTAINTY)
+        if pos in self._data.seen:
+            old_unc = self._data.uncertainty.get(pos, 0.0)
+            self._data.uncertainty[pos] = min(1.0, old_unc + KNOWLEDGE_CHANGE_UNCERTAINTY)
 
-    def get_uncertainty(self, x: int, y: int, z: int, is_underworlder: bool) -> float:
+    def get_uncertainty(self, x: int, y: int, z: int) -> float:
         """Return uncertainty for a cell (0.0 if not tracked)."""
-        faction = self._get_faction(is_underworlder)
-        return faction.uncertainty.get((x, y, z), 0.0)
+        return self._data.uncertainty.get((x, y, z), 0.0)
 
-    def get_stats(self, is_underworlder: bool) -> dict:
-        """Return summary stats for a faction's knowledge archive."""
-        faction = self._get_faction(is_underworlder)
-        unc_values = list(faction.uncertainty.values())
+    def get_stats(self) -> dict:
+        """Return summary stats for the knowledge archive."""
+        unc_values = list(self._data.uncertainty.values())
         avg_unc = sum(unc_values) / len(unc_values) if unc_values else 0.0
         return {
-            "cells_known": len(faction.seen),
-            "hazards_known": len(faction.hazards),
-            "treasures_known": len(faction.treasures),
+            "cells_known": len(self._data.seen),
+            "hazards_known": len(self._data.hazards),
+            "treasures_known": len(self._data.treasures),
             "avg_uncertainty": avg_unc,
         }

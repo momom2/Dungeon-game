@@ -1,4 +1,9 @@
-"""3D voxel grid data structure backed by a NumPy array."""
+"""3D voxel grid data structure backed by a NumPy array.
+
+Dependencies: config
+Dependents: nearly all subsystems (building, physics, rendering, intruders),
+    main (wiring), tests across all domains
+"""
 
 from __future__ import annotations
 

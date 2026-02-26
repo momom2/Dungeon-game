@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.skip(reason="Intruder archetypes pending rework")
-
 from dungeon_builder.core.event_bus import EventBus
 from dungeon_builder.world.voxel_grid import VoxelGrid
 from dungeon_builder.world.pathfinding import AStarPathfinder
@@ -19,8 +17,8 @@ from dungeon_builder.utils.rng import SeededRNG
 from dungeon_builder.intruders.decision import IntruderAI
 from dungeon_builder.intruders.agent import Intruder, IntruderState
 from dungeon_builder.intruders.archetypes import (
-    VANGUARD,
-    SHADOWBLADE,
+    INQUISITOR,
+    EXPLORER,
     IntruderObjective,
 )
 from dungeon_builder.intruders.personal_map import PersonalMap
@@ -60,7 +58,7 @@ def _make_ai(width=16, depth=16, height=5, core_pos=(7, 7, 1), seed=42):
     return ai, bus, grid
 
 
-def _make_intruder(x, y, z, pmap=None, archetype=VANGUARD):
+def _make_intruder(x, y, z, pmap=None, archetype=INQUISITOR):
     """Create a minimal intruder for testing."""
     if pmap is None:
         pmap = PersonalMap()
@@ -236,7 +234,7 @@ class TestGoldBaitTriggersTraps:
 
         # Use Shadowblade (greed > 0) so it will grab the bait
         pmap = PersonalMap()
-        intruder = _make_intruder(4, 0, 1, pmap=pmap, archetype=SHADOWBLADE)
+        intruder = _make_intruder(4, 0, 1, pmap=pmap, archetype=EXPLORER)
         ai.intruders.append(intruder)
 
         # Simulate the bait grab interaction completing:
@@ -259,7 +257,7 @@ class TestGoldBaitTriggersTraps:
         grid.set_block_state(5, 1, 1, 0)  # open
 
         pmap = PersonalMap()
-        intruder = _make_intruder(4, 0, 1, pmap=pmap, archetype=SHADOWBLADE)
+        intruder = _make_intruder(4, 0, 1, pmap=pmap, archetype=EXPLORER)
         ai.intruders.append(intruder)
 
         intruder.state = IntruderState.INTERACTING

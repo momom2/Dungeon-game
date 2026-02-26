@@ -5,6 +5,9 @@ Pumps drive directional flow through their pipe networks, including water
 level transport (pulling water from intake and distributing through pipes).
 
 Network topology is cached and invalidated on voxel changes.
+
+Dependencies: config, core.event_bus, world.voxel_grid
+Dependents: main (wiring), tests/physics/test_pipe_physics.py
 """
 
 from __future__ import annotations

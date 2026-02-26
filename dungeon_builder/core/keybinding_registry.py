@@ -5,6 +5,11 @@ strings (e.g. ``"w"``).  All keyboard accept() calls should go through
 ``registry.get(action)`` instead of hardcoding key names.
 
 Mouse bindings (mouse1/2/3, wheel) are NOT included — they're not rebindable.
+
+Dependencies: (none — standalone)
+Dependents: core.game_state, main, rendering.camera, ui.hud,
+    ui.main_menu, ui.render_mode_selector, ui.crafting_book_panel,
+    tests/core/test_keybinding.py
 """
 
 from __future__ import annotations

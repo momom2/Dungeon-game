@@ -1,4 +1,9 @@
-"""Dig queue and construction system."""
+"""Dig queue and construction system.
+
+Dependencies: config, core.event_bus, core.game_state, world.voxel_grid
+Dependents: main (wiring), core.game_state, core.save_system,
+    rendering.voxel_renderer, tests/building/, tests/rendering/
+"""
 
 from __future__ import annotations
 

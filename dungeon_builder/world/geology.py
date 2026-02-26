@@ -1,4 +1,9 @@
-"""Procedural geology generation with realistic strata, ores, and a surface river."""
+"""Procedural geology generation with realistic strata, ores, and a surface river.
+
+Dependencies: config, utils.rng, world.voxel_grid
+Dependents: main (wiring), tests/world/test_geology.py,
+    tests/world/test_core_placement.py
+"""
 
 from __future__ import annotations
 
@@ -27,7 +32,6 @@ from dungeon_builder.config import (
     VOXEL_GOLD_ORE,
     VOXEL_MANA_CRYSTAL,
     VOXEL_LAVA,
-    VOXEL_WATER,
     VOXEL_WATER_SOURCE,
     VOXEL_WATER_SINK,
     VOXEL_LAVA_SOURCE,
@@ -42,7 +46,6 @@ from dungeon_builder.config import (
     CAVE_CORE_EXCLUSION,
     CORE_X,
     CORE_Y,
-    CORE_Z,
 )
 from dungeon_builder.utils.rng import SeededRNG
 from dungeon_builder.world.voxel_grid import VoxelGrid

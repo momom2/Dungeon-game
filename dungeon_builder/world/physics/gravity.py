@@ -1,4 +1,9 @@
-"""Gravity physics: loose blocks fall, disconnected blocks become loose."""
+"""Gravity physics: loose blocks fall, disconnected blocks become loose.
+
+Dependencies: config, core.event_bus, world.voxel_grid
+Dependents: main (wiring), tests/physics/test_gravity.py,
+    tests/physics/test_impact_cascade.py
+"""
 
 from __future__ import annotations
 
@@ -6,7 +11,6 @@ import numpy as np
 from typing import TYPE_CHECKING
 
 from dungeon_builder.config import (
-    CHUNK_SIZE,
     VOXEL_AIR,
     VOXEL_LAVA,
     VOXEL_WATER,
@@ -26,7 +30,6 @@ from dungeon_builder.config import (
     SHOCK_STRUCTURAL_FACTOR,
     MAX_SHOCK_PROPAGATION_STEPS,
     SHATTER_THRESHOLD,
-    MAX_CASCADE_DEPTH,
     GRANULAR_POROSITY_THRESHOLD,
     REPOSE_TICK_INTERVAL,
     MAX_SPREAD_PER_TICK,

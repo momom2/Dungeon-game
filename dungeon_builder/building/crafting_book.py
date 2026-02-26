@@ -5,11 +5,15 @@ Each recipe has:
   - description: what happens
   - check_fn(grid, x, y, z, held_type) -> bool: can the craft happen here?
   - craft_fn(grid, x, y, z, held_type, event_bus) -> bool: execute the craft
+
+Dependencies: config, core.event_bus, world.voxel_grid
+Dependents: building.crafting_journal, building.crafting_system,
+    tests/building/test_crafting.py, tests/building/test_crafting_journal.py
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, TYPE_CHECKING
 
 from dungeon_builder.config import (
@@ -60,7 +64,6 @@ from dungeon_builder.config import (
     ORE_TO_METAL,
     PIPEABLE_STONE_TYPES,
     base_metal_of,
-    is_enchanted_metal,
 )
 
 if TYPE_CHECKING:

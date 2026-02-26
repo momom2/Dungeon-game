@@ -3,6 +3,10 @@
 Moisture seeps through porous materials over time, creating wet zones
 around water sources. Lava voxels generate steam (humidity) in adjacent
 blocks. Surface blocks lose humidity through evaporation.
+
+Dependencies: config, core.event_bus, world.voxel_grid
+Dependents: main (wiring), tests/physics/test_humidity.py,
+    tests/physics/test_steam_vent.py
 """
 
 from __future__ import annotations
@@ -18,7 +22,6 @@ from dungeon_builder.config import (
     VOXEL_WATER_SINK,
     VOXEL_STEAM_VENT,
     VOXEL_POROSITY,
-    LAVA_TEMPERATURE,
     SURFACE_Z,
     HUMIDITY_TICK_INTERVAL,
     HUMIDITY_DIFFUSION_RATE,
@@ -145,7 +148,7 @@ class HumidityPhysics:
 
         # Steam from lava: blocks adjacent to lava gain humidity
         # (lava is an explicit source — allowed to create humidity)
-        # Use lava_level > 0 to detect fluid lava (replaces old VOXEL_INFUSED_LAVA check)
+        # Use lava_level > 0 to detect fluid lava
         lava_mask = grid.lava_level > 0
         if np.any(lava_mask):
             steam = np.zeros_like(hum)

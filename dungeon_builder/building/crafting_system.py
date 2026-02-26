@@ -6,6 +6,11 @@ Flow:
 3. Player clicks a highlighted voxel -> "craft_at_position" event
 4. System executes the recipe, consumes material, re-scans highlights
 5. Player cancels (ESC/right-click) or runs out of material -> exit craft mode
+
+Dependencies: building.crafting_book, core.event_bus, core.game_state,
+    world.voxel_grid, building.move_system
+Dependents: main (wiring), tests/building/test_crafting.py,
+    tests/building/test_block_state.py, tests/building/test_metal_type_system.py
 """
 
 from __future__ import annotations

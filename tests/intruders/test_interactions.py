@@ -1,4 +1,13 @@
-"""Tests for intruder micro-interaction system."""
+"""Tests for intruder micro-interaction system.
+
+All checks use archetype flags and stats (can_fly, can_bash_door,
+damage, cunning, etc.) rather than archetype name strings, so new
+archetypes work automatically based on their stat block.
+
+Dependencies: intruders.interactions, intruders.archetypes, intruders.agent,
+    intruders.personal_map, config
+Dependents: (none)
+"""
 
 from dataclasses import dataclass
 
@@ -9,21 +18,37 @@ from dungeon_builder.intruders.interactions import (
     InteractionResult,
     InteractionInfo,
 )
-from dungeon_builder.intruders.agent import Intruder, IntruderState
 from dungeon_builder.intruders.archetypes import (
-    IntruderObjective,
-    VANGUARD, SHADOWBLADE, TUNNELER, PYREMANCER,
-    WINDCALLER, WARDEN, GORECLAW, GLOOMSEER,
+    EXPLORER,
+    INQUISITOR,
+    GLOOMWARDEN,
+    MOLE_TAMER,
+    EIDOLON,
+    ALCHEMIST,
+    CARTOMANCER,
+    HERO,
     ALL_ARCHETYPES,
+    IntruderObjective,
 )
+from dungeon_builder.intruders.agent import Intruder, IntruderState
 from dungeon_builder.intruders.personal_map import PersonalMap
 from dungeon_builder.config import (
-    VOXEL_AIR, VOXEL_DOOR, VOXEL_SPIKE, VOXEL_TREASURE,
-    VOXEL_TARP, VOXEL_ROLLING_STONE, VOXEL_REINFORCED_WALL,
-    VOXEL_LAVA, VOXEL_WATER, VOXEL_SLOPE, VOXEL_STAIRS,
+    VOXEL_AIR,
+    VOXEL_DOOR,
+    VOXEL_SPIKE,
+    VOXEL_TREASURE,
+    VOXEL_TARP,
+    VOXEL_ROLLING_STONE,
+    VOXEL_REINFORCED_WALL,
+    VOXEL_LAVA,
+    VOXEL_WATER,
+    VOXEL_SLOPE,
+    VOXEL_STAIRS,
     VOXEL_STONE,
-    SPIKE_DAMAGE, ROLLING_STONE_DAMAGE,
-    DOOR_BASH_TICKS, DOOR_BASH_TICKS_GORECLAW, DOOR_LOCKPICK_TICKS,
+    SPIKE_DAMAGE,
+    ROLLING_STONE_DAMAGE,
+    DOOR_BASH_TICKS,
+    DOOR_LOCKPICK_TICKS,
     GOLD_BAIT_INTERACT_TICKS,
     HEAT_BEACON_DAMAGE,
     STEAM_VENT_DAMAGE,
@@ -40,6 +65,7 @@ from dungeon_builder.config import (
     VOXEL_PUMP,
     VOXEL_STEAM_VENT,
 )
+import dungeon_builder.config as _cfg
 
 
 def _make(arch, objective=IntruderObjective.DESTROY_CORE):
@@ -51,18 +77,17 @@ def _make(arch, objective=IntruderObjective.DESTROY_CORE):
 
 @dataclass
 class MockArch:
-    name: str = "Vanguard"
+    name: str = "MockIntruder"
     greed: float = 0.5
-    fire_immune: bool = False
     can_fly: bool = False
     can_dig: bool = False
     can_bash_door: bool = False
     can_lockpick: bool = False
     arcane_sight_range: int = 0
-    spike_detect_range: int = 0
+    trap_detect_range: int = 0
     cunning: float = 0.3
-    frenzy_threshold: float = 0.0
     speed: int = 2
+    damage: int = 5
 
 
 class MockIntruder:
@@ -90,42 +115,40 @@ class TestDoorInteractions:
         info = handle_block(_make(arch), VOXEL_DOOR, block_state=0)
         assert info.result == InteractionResult.CONTINUE
 
-    def test_vanguard_bashes_closed_door(self):
-        info = handle_block(_make(VANGUARD), VOXEL_DOOR, block_state=1)
+    def test_bash_ticks_derived_from_damage(self):
+        """Door bash ticks = max(1, DOOR_BASH_TICKS - damage // 2)."""
+        # Inquisitor: damage=8, can_bash_door=True
+        info = handle_block(_make(INQUISITOR), VOXEL_DOOR, block_state=1)
         assert info.result == InteractionResult.INTERACT
-        assert info.ticks == DOOR_BASH_TICKS
+        expected_ticks = max(1, DOOR_BASH_TICKS - INQUISITOR.damage // 2)
+        assert info.ticks == expected_ticks
         assert info.interaction_type == "bash_door"
 
-    def test_shadowblade_lockpicks_closed_door(self):
-        info = handle_block(_make(SHADOWBLADE), VOXEL_DOOR, block_state=1)
+    def test_hero_bashes_faster_due_to_high_damage(self):
+        """Hero has damage=20, so bash ticks should be lower than Inquisitor."""
+        info_hero = handle_block(_make(HERO), VOXEL_DOOR, block_state=1)
+        info_inq = handle_block(_make(INQUISITOR), VOXEL_DOOR, block_state=1)
+        assert info_hero.result == InteractionResult.INTERACT
+        assert info_hero.ticks < info_inq.ticks
+
+    def test_explorer_lockpicks_closed_door(self):
+        info = handle_block(_make(EXPLORER), VOXEL_DOOR, block_state=1)
         assert info.result == InteractionResult.INTERACT
         assert info.ticks == DOOR_LOCKPICK_TICKS
         assert info.interaction_type == "lockpick"
 
-    def test_goreclaw_bashes_closed_door_faster(self):
-        info = handle_block(_make(GORECLAW), VOXEL_DOOR, block_state=1)
-        assert info.result == InteractionResult.INTERACT
-        assert info.ticks == DOOR_BASH_TICKS_GORECLAW
-
-    def test_tunneler_bashes_closed_door(self):
-        info = handle_block(_make(TUNNELER), VOXEL_DOOR, block_state=1)
-        assert info.result == InteractionResult.INTERACT
-        assert info.interaction_type == "bash_door"
-
-    def test_pyremancer_repaths_closed_door(self):
-        info = handle_block(_make(PYREMANCER), VOXEL_DOOR, block_state=1)
+    def test_non_basher_non_lockpicker_repaths_closed_door(self):
+        # Alchemist: can_bash_door=False, can_lockpick=False
+        info = handle_block(_make(ALCHEMIST), VOXEL_DOOR, block_state=1)
         assert info.result == InteractionResult.REPATH
 
-    def test_windcaller_repaths_closed_door(self):
-        info = handle_block(_make(WINDCALLER), VOXEL_DOOR, block_state=1)
+    def test_gloomwarden_repaths_closed_door(self):
+        # Gloomwarden: no bash, no lockpick
+        info = handle_block(_make(GLOOMWARDEN), VOXEL_DOOR, block_state=1)
         assert info.result == InteractionResult.REPATH
 
-    def test_warden_repaths_closed_door(self):
-        info = handle_block(_make(WARDEN), VOXEL_DOOR, block_state=1)
-        assert info.result == InteractionResult.REPATH
-
-    def test_gloomseer_repaths_closed_door(self):
-        info = handle_block(_make(GLOOMSEER), VOXEL_DOOR, block_state=1)
+    def test_cartomancer_repaths_closed_door(self):
+        info = handle_block(_make(CARTOMANCER), VOXEL_DOOR, block_state=1)
         assert info.result == InteractionResult.REPATH
 
 
@@ -138,70 +161,99 @@ class TestSpikeInteractions:
         info = handle_block(_make(arch), VOXEL_SPIKE, block_state=0)
         assert info.result == InteractionResult.CONTINUE
 
-    def test_vanguard_takes_half_damage(self):
-        info = handle_block(_make(VANGUARD), VOXEL_SPIKE, block_state=1)
+    def test_can_bash_door_types_take_half_damage(self):
+        """Intruders with can_bash_door take half spike damage."""
+        # Inquisitor has can_bash_door=True
+        info = handle_block(_make(INQUISITOR), VOXEL_SPIKE, block_state=1)
         assert info.result == InteractionResult.DAMAGE
         assert info.damage == SPIKE_DAMAGE // 2
 
-    def test_shadowblade_detects_and_avoids(self):
-        info = handle_block(_make(SHADOWBLADE), VOXEL_SPIKE, block_state=1)
+    def test_hero_takes_half_damage(self):
+        """Hero has can_bash_door=True."""
+        info = handle_block(_make(HERO), VOXEL_SPIKE, block_state=1)
+        assert info.result == InteractionResult.DAMAGE
+        assert info.damage == SPIKE_DAMAGE // 2
+
+    def test_trap_detect_avoids_spike(self):
+        """Intruder with trap_detect_range > 0 detects and avoids spike."""
+        # Explorer has trap_detect_range=2
+        info = handle_block(_make(EXPLORER), VOXEL_SPIKE, block_state=1)
         assert info.result == InteractionResult.REPATH
 
-    def test_goreclaw_smashes_spike(self):
-        info = handle_block(_make(GORECLAW), VOXEL_SPIKE, block_state=1)
-        assert info.result == InteractionResult.DESTROY_BLOCK
-        assert info.damage == SPIKE_DAMAGE // 2  # Takes 10 damage
-
-    def test_windcaller_flies_over_spike(self):
-        info = handle_block(_make(WINDCALLER), VOXEL_SPIKE, block_state=1)
+    def test_flyer_flies_over_spike(self):
+        # Eidolon has can_fly=True
+        info = handle_block(_make(EIDOLON), VOXEL_SPIKE, block_state=1)
         assert info.result == InteractionResult.CONTINUE
 
-    def test_warden_takes_full_damage(self):
-        info = handle_block(_make(WARDEN), VOXEL_SPIKE, block_state=1)
+    def test_regular_intruder_takes_full_damage(self):
+        # Alchemist: no fly, no trap_detect, no bash
+        info = handle_block(_make(ALCHEMIST), VOXEL_SPIKE, block_state=1)
         assert info.result == InteractionResult.DAMAGE
         assert info.damage == SPIKE_DAMAGE
 
-    def test_tunneler_takes_full_damage(self):
-        info = handle_block(_make(TUNNELER), VOXEL_SPIKE, block_state=1)
+    def test_mole_tamer_takes_full_damage(self):
+        # Mole Tamer: no fly, trap_detect_range=0, no bash
+        info = handle_block(_make(MOLE_TAMER), VOXEL_SPIKE, block_state=1)
         assert info.result == InteractionResult.DAMAGE
         assert info.damage == SPIKE_DAMAGE
 
-    def test_pyremancer_takes_full_damage(self):
-        info = handle_block(_make(PYREMANCER), VOXEL_SPIKE, block_state=1)
+    def test_cartomancer_takes_full_damage(self):
+        info = handle_block(_make(CARTOMANCER), VOXEL_SPIKE, block_state=1)
         assert info.result == InteractionResult.DAMAGE
         assert info.damage == SPIKE_DAMAGE
 
-    def test_gloomseer_takes_full_damage(self):
-        info = handle_block(_make(GLOOMSEER), VOXEL_SPIKE, block_state=1)
-        assert info.result == InteractionResult.DAMAGE
-        assert info.damage == SPIKE_DAMAGE
+
+# ── Lava interactions ───────────────────────────────────────────────
+
+
+class TestLavaInteractions:
+    def test_flyer_passes_over_lava(self):
+        # Eidolon can fly
+        info = handle_block(_make(EIDOLON), VOXEL_LAVA, 0)
+        assert info.result == InteractionResult.CONTINUE
+
+    def test_non_flyer_dies_in_lava(self):
+        for arch in ALL_ARCHETYPES:
+            if arch.can_fly:
+                continue
+            info = handle_block(_make(arch), VOXEL_LAVA, 0)
+            assert info.result == InteractionResult.DEATH, (
+                f"{arch.name} should die in lava"
+            )
+
+
+# ── Water interactions ──────────────────────────────────────────────
+
+
+class TestWaterInteractions:
+    def test_water_returns_continue(self):
+        """Water entry is permitted from interaction layer; deep-water
+        handling happens in decision.py."""
+        for arch in ALL_ARCHETYPES:
+            info = handle_block(_make(arch), VOXEL_WATER, 0)
+            assert info.result == InteractionResult.CONTINUE, (
+                f"{arch.name} should get CONTINUE for water"
+            )
 
 
 # ── Treasure interactions ───────────────────────────────────────────
 
 
 class TestTreasureInteractions:
-    def test_shadowblade_collects(self):
-        info = handle_block(_make(SHADOWBLADE), VOXEL_TREASURE, 0)
+    def test_greedy_intruder_collects(self):
+        # Explorer: greed=0.7
+        info = handle_block(_make(EXPLORER), VOXEL_TREASURE, 0)
         assert info.result == InteractionResult.COLLECT
         assert info.interaction_type == "grab_treasure"
 
-    def test_vanguard_ignores(self):
-        info = handle_block(_make(VANGUARD), VOXEL_TREASURE, 0)
-        assert info.result == InteractionResult.CONTINUE  # greed=0.0
+    def test_non_greedy_intruder_ignores(self):
+        # Hero: greed=0.0
+        info = handle_block(_make(HERO), VOXEL_TREASURE, 0)
+        assert info.result == InteractionResult.CONTINUE
 
-    def test_goreclaw_ignores(self):
-        info = handle_block(_make(GORECLAW), VOXEL_TREASURE, 0)
-        assert info.result == InteractionResult.CONTINUE  # greed=0.0
-
-    def test_pyremancer_collects_slightly(self):
-        # Pyremancer has greed=0.1 (> 0)
-        info = handle_block(_make(PYREMANCER), VOXEL_TREASURE, 0)
-        assert info.result == InteractionResult.COLLECT
-
-    def test_gloomseer_collects(self):
-        # greed=0.1
-        info = handle_block(_make(GLOOMSEER), VOXEL_TREASURE, 0)
+    def test_slightly_greedy_collects(self):
+        # Inquisitor: greed=0.05 (>0)
+        info = handle_block(_make(INQUISITOR), VOXEL_TREASURE, 0)
         assert info.result == InteractionResult.COLLECT
 
 
@@ -209,36 +261,29 @@ class TestTreasureInteractions:
 
 
 class TestTarpInteractions:
-    def test_windcaller_flies_over(self):
-        info = handle_block(_make(WINDCALLER), VOXEL_TARP, 0)
+    def test_flyer_flies_over(self):
+        # Eidolon: can_fly=True
+        info = handle_block(_make(EIDOLON), VOXEL_TARP, 0)
         assert info.result == InteractionResult.CONTINUE
 
-    def test_gloomseer_detects_via_arcane(self):
-        info = handle_block(_make(GLOOMSEER), VOXEL_TARP, 0)
+    def test_arcane_sight_detects(self):
+        # Gloomwarden: arcane_sight_range=3
+        info = handle_block(_make(GLOOMWARDEN), VOXEL_TARP, 0)
         assert info.result == InteractionResult.REPATH
 
-    def test_shadowblade_detects_high_cunning(self):
-        # Shadowblade cunning=0.8 >= 0.5
-        info = handle_block(_make(SHADOWBLADE), VOXEL_TARP, 0)
+    def test_high_cunning_detects(self):
+        # Explorer: cunning=0.7 >= TARP_DETECT_CUNNING (0.5)
+        info = handle_block(_make(EXPLORER), VOXEL_TARP, 0)
         assert info.result == InteractionResult.REPATH
 
-    def test_vanguard_falls_through(self):
-        # Vanguard cunning=0.0
-        info = handle_block(_make(VANGUARD), VOXEL_TARP, 0)
+    def test_low_cunning_falls_through(self):
+        # Hero: cunning=0.1, no fly, no arcane sight
+        info = handle_block(_make(HERO), VOXEL_TARP, 0)
         assert info.result == InteractionResult.FALL
 
-    def test_goreclaw_falls_through(self):
-        info = handle_block(_make(GORECLAW), VOXEL_TARP, 0)
-        assert info.result == InteractionResult.FALL
-
-    def test_tunneler_falls_through(self):
-        # Tunneler cunning=0.3 < 0.5
-        info = handle_block(_make(TUNNELER), VOXEL_TARP, 0)
-        assert info.result == InteractionResult.FALL
-
-    def test_warden_falls_through(self):
-        # Warden cunning=0.4 < 0.5
-        info = handle_block(_make(WARDEN), VOXEL_TARP, 0)
+    def test_inquisitor_falls_through(self):
+        # Inquisitor: cunning=0.2 < 0.5, no fly, no arcane
+        info = handle_block(_make(INQUISITOR), VOXEL_TARP, 0)
         assert info.result == InteractionResult.FALL
 
 
@@ -246,29 +291,28 @@ class TestTarpInteractions:
 
 
 class TestRollingStoneInteractions:
-    def test_windcaller_flies_over(self):
-        info = handle_block(_make(WINDCALLER), VOXEL_ROLLING_STONE, 0)
+    def test_flyer_flies_over(self):
+        info = handle_block(_make(EIDOLON), VOXEL_ROLLING_STONE, 0)
         assert info.result == InteractionResult.CONTINUE
 
-    def test_shadowblade_dodges_high_speed(self):
-        # Shadowblade speed=3 >= 3
-        info = handle_block(_make(SHADOWBLADE), VOXEL_ROLLING_STONE, 0)
+    def test_fast_intruder_dodges(self):
+        # Explorer: speed=3 >= 3
+        info = handle_block(_make(EXPLORER), VOXEL_ROLLING_STONE, 0)
         assert info.result == InteractionResult.CONTINUE
 
-    def test_windcaller_dodges_high_speed(self):
-        # Windcaller speed=4 >= 3
-        info = handle_block(_make(WINDCALLER), VOXEL_ROLLING_STONE, 0)
-        assert info.result == InteractionResult.CONTINUE
-
-    def test_vanguard_takes_damage(self):
-        info = handle_block(_make(VANGUARD), VOXEL_ROLLING_STONE, 0)
+    def test_slow_intruder_takes_damage(self):
+        # Inquisitor: speed=1 < 3
+        info = handle_block(_make(INQUISITOR), VOXEL_ROLLING_STONE, 0)
         assert info.result == InteractionResult.DAMAGE
         assert info.damage == ROLLING_STONE_DAMAGE
 
-    def test_goreclaw_takes_damage(self):
-        info = handle_block(_make(GORECLAW), VOXEL_ROLLING_STONE, 0)
-        assert info.result == InteractionResult.DAMAGE
-        assert info.damage == ROLLING_STONE_DAMAGE
+    def test_flying_intruders_immune_to_ground_traps(self):
+        """Flying intruders are immune to ground traps: spikes, tarp, rolling stone."""
+        for vtype in (VOXEL_SPIKE, VOXEL_TARP, VOXEL_ROLLING_STONE):
+            info = handle_block(_make(EIDOLON), vtype, 0)
+            assert info.result == InteractionResult.CONTINUE, (
+                f"Eidolon should be immune to {vtype}"
+            )
 
 
 # ── Reinforced wall ─────────────────────────────────────────────────
@@ -281,50 +325,18 @@ class TestReinforcedWall:
         assert info.result == InteractionResult.REPATH
 
 
-# ── Lava interactions ───────────────────────────────────────────────
-
-
-class TestLavaInteractions:
-    def test_pyremancer_walks_through(self):
-        info = handle_block(_make(PYREMANCER), VOXEL_LAVA, 0)
-        assert info.result == InteractionResult.CONTINUE
-
-    @pytest.mark.parametrize("arch", [VANGUARD, SHADOWBLADE, TUNNELER,
-                                       WINDCALLER, WARDEN, GORECLAW, GLOOMSEER],
-                             ids=lambda a: a.name)
-    def test_non_immune_death(self, arch):
-        info = handle_block(_make(arch), VOXEL_LAVA, 0)
-        assert info.result == InteractionResult.DEATH
-
-
-# ── Water interactions ──────────────────────────────────────────────
-
-
-class TestWaterInteractions:
-    def test_pyremancer_dies_in_water(self):
-        info = handle_block(_make(PYREMANCER), VOXEL_WATER, 0)
-        assert info.result == InteractionResult.DEATH
-
-    @pytest.mark.parametrize("arch", [VANGUARD, SHADOWBLADE, TUNNELER,
-                                       WINDCALLER, WARDEN, GORECLAW, GLOOMSEER],
-                             ids=lambda a: a.name)
-    def test_non_fire_repath(self, arch):
-        info = handle_block(_make(arch), VOXEL_WATER, 0)
-        assert info.result == InteractionResult.REPATH
-
-
 # ── Other solid blocks ──────────────────────────────────────────────
 
 
 class TestOtherSolids:
     def test_stone_repaths(self):
-        info = handle_block(_make(VANGUARD), VOXEL_STONE, 0)
+        info = handle_block(_make(INQUISITOR), VOXEL_STONE, 0)
         assert info.result == InteractionResult.REPATH
 
 
-# ══════════════════════════════════════════════════════════════════════
+# ======================================================================
 # Tests from test_new_block_interactions.py
-# ══════════════════════════════════════════════════════════════════════
+# ======================================================================
 
 
 # ── Gold Bait ────────────────────────────────────────────────────────
@@ -364,24 +376,24 @@ class TestGoldBait:
 
 
 class TestHeatBeacon:
-    """Heat Beacon: CONTINUE if fire_immune; DAMAGE otherwise."""
+    """Heat Beacon: CONTINUE if can_fly; DAMAGE otherwise."""
 
-    def test_fire_immune_ignores_beacon(self):
-        intruder = MockIntruder(fire_immune=True)
+    def test_flyer_ignores_beacon(self):
+        intruder = MockIntruder(can_fly=True)
         info = handle_block(intruder, VOXEL_HEAT_BEACON, 0)
         assert info.result == InteractionResult.CONTINUE
 
-    def test_non_immune_takes_damage(self):
-        intruder = MockIntruder(fire_immune=False)
+    def test_non_flyer_takes_damage(self):
+        intruder = MockIntruder(can_fly=False)
         info = handle_block(intruder, VOXEL_HEAT_BEACON, 0)
         assert info.result == InteractionResult.DAMAGE
         assert info.damage == HEAT_BEACON_DAMAGE
 
     def test_damage_amount_matches_config(self):
         """Verify the damage value is the exact config constant."""
-        intruder = MockIntruder(fire_immune=False)
+        intruder = MockIntruder(can_fly=False)
         info = handle_block(intruder, VOXEL_HEAT_BEACON, 0)
-        assert info.damage == 15  # HEAT_BEACON_DAMAGE
+        assert info.damage == _cfg.HEAT_BEACON_DAMAGE
 
 
 # ── Pressure Plate ───────────────────────────────────────────────────
@@ -455,7 +467,7 @@ class TestAlarmBell:
         assert info.result == InteractionResult.CONTINUE
 
     def test_any_archetype_continues(self):
-        intruder = MockIntruder(can_fly=True, fire_immune=True)
+        intruder = MockIntruder(can_fly=True)
         info = handle_block(intruder, VOXEL_ALARM_BELL, 0)
         assert info.result == InteractionResult.CONTINUE
 
@@ -542,38 +554,28 @@ class TestPump:
 
 
 class TestSteamVent:
-    """Steam Vent: CONTINUE if fire_immune or can_fly; DAMAGE otherwise."""
-
-    def test_fire_immune_ignores(self):
-        intruder = MockIntruder(fire_immune=True, can_fly=False)
-        info = handle_block(intruder, VOXEL_STEAM_VENT, 0)
-        assert info.result == InteractionResult.CONTINUE
+    """Steam Vent: CONTINUE if can_fly; DAMAGE otherwise."""
 
     def test_flyer_ignores(self):
-        intruder = MockIntruder(fire_immune=False, can_fly=True)
+        intruder = MockIntruder(can_fly=True)
         info = handle_block(intruder, VOXEL_STEAM_VENT, 0)
         assert info.result == InteractionResult.CONTINUE
 
-    def test_fire_immune_and_flyer_continues(self):
-        intruder = MockIntruder(fire_immune=True, can_fly=True)
-        info = handle_block(intruder, VOXEL_STEAM_VENT, 0)
-        assert info.result == InteractionResult.CONTINUE
-
-    def test_non_immune_non_flyer_takes_damage(self):
-        intruder = MockIntruder(fire_immune=False, can_fly=False)
+    def test_non_flyer_takes_damage(self):
+        intruder = MockIntruder(can_fly=False)
         info = handle_block(intruder, VOXEL_STEAM_VENT, 0)
         assert info.result == InteractionResult.DAMAGE
         assert info.damage == STEAM_VENT_DAMAGE
 
     def test_damage_amount_matches_config(self):
-        intruder = MockIntruder(fire_immune=False, can_fly=False)
+        intruder = MockIntruder(can_fly=False)
         info = handle_block(intruder, VOXEL_STEAM_VENT, 0)
-        assert info.damage == 10  # STEAM_VENT_DAMAGE
+        assert info.damage == _cfg.STEAM_VENT_DAMAGE
 
 
-# ══════════════════════════════════════════════════════════════════════
+# ======================================================================
 # Tests from test_greed_appeal.py
-# ══════════════════════════════════════════════════════════════════════
+# ======================================================================
 
 
 # ── Gold Bait greed tests ────────────────────────────────────────────

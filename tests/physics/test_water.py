@@ -14,8 +14,8 @@ from dungeon_builder.world.physics.structural import StructuralIntegrityPhysics
 from dungeon_builder.intruders.agent import Intruder, IntruderState
 from dungeon_builder.intruders.archetypes import (
     IntruderObjective,
-    VANGUARD,
-    WINDCALLER,
+    INQUISITOR,
+    EXPLORER,
 )
 from dungeon_builder.intruders.personal_map import PersonalMap
 from dungeon_builder.intruders.decision import IntruderAI
@@ -579,7 +579,7 @@ def _place_water(grid, x, y, z, level=255):
 def _make_intruder(x=5, y=5, z=0, hp=100, archetype=None):
     """Create a minimal intruder at a given position."""
     if archetype is None:
-        archetype = VANGUARD
+        archetype = INQUISITOR
     pmap = PersonalMap()
     intruder = Intruder(
         intruder_id=1, x=x, y=y, z=z,
@@ -867,7 +867,6 @@ class TestBuoyancy:
 # Intruder water interaction tests
 # ══════════════════════════════════════════════════════════════════════════
 
-@pytest.mark.skip(reason="Intruder archetypes pending rework")
 class TestIntruderWaterDamage:
     """Tests for intruder drowning damage in deep water."""
 
@@ -943,7 +942,6 @@ class TestIntruderWaterDamage:
         assert intruder.hp == initial_hp
 
 
-@pytest.mark.skip(reason="Intruder archetypes pending rework")
 class TestIntruderCurrentPush:
     """Tests for water current pushing intruders."""
 
@@ -1094,7 +1092,6 @@ class TestIntruderCurrentPush:
         assert intruder.y == 5
 
 
-@pytest.mark.skip(reason="Intruder archetypes pending rework")
 class TestIntruderWaterMoralePenalty:
     """Tests for morale effects of water damage."""
 

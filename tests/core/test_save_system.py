@@ -124,30 +124,25 @@ class FakeIntruderAI:
     def __init__(self):
         self.intruders = []
         self.parties = []
-        self._underworld_parties = []
         self._next_id = 1
         self._next_party_id = 1
         self._spawn_timer = 0
-        self._underworld_spawn_timer = 0
         self._alarm_cooldowns = {}
         self._game_over = False
         self.spawning_enabled = False
 
 
-def _make_intruder(intruder_id=1, x=5, y=5, z=0, archetype_name="Vanguard",
+def _make_intruder(intruder_id=1, x=5, y=5, z=0, archetype_name="Inquisitor",
                     hp=None, state_name="ADVANCING", objective_name="DESTROY_CORE",
-                    is_underworlder=False, level=1):
+                    level=1):
     """Create a real Intruder object for serialization tests."""
     from dungeon_builder.intruders.agent import Intruder, IntruderState
     from dungeon_builder.intruders.archetypes import (
-        ARCHETYPE_BY_NAME, UNDERWORLD_ARCHETYPE_BY_NAME, IntruderObjective,
+        ARCHETYPE_BY_NAME, IntruderObjective,
     )
     from dungeon_builder.intruders.personal_map import PersonalMap
 
-    if is_underworlder:
-        archetype = UNDERWORLD_ARCHETYPE_BY_NAME[archetype_name]
-    else:
-        archetype = ARCHETYPE_BY_NAME[archetype_name]
+    archetype = ARCHETYPE_BY_NAME[archetype_name]
 
     pmap = PersonalMap()
     pmap.reveal(x, y, z, 0)  # reveal starting cell as air
@@ -159,7 +154,6 @@ def _make_intruder(intruder_id=1, x=5, y=5, z=0, archetype_name="Vanguard",
         archetype=archetype,
         objective=objective,
         personal_map=pmap,
-        is_underworlder=is_underworlder,
         level=level,
     )
     intruder.state = IntruderState[state_name]
@@ -274,7 +268,7 @@ class TestIntruderSerialization:
         data = _serialize_intruder(intruder)
         restored = _deserialize_intruder(data)
         assert restored.id == intruder.id
-        assert restored.archetype.name == "Vanguard"
+        assert restored.archetype.name == "Inquisitor"
         assert restored.x == intruder.x
         assert restored.y == intruder.y
         assert restored.z == intruder.z
@@ -324,21 +318,11 @@ class TestIntruderSerialization:
         # Verify tuples (not lists)
         assert isinstance(restored.path[0], tuple)
 
-    def test_frenzy_preserved(self):
-        intruder = _make_intruder()
-        intruder.frenzy_active = True
+    def test_eidolon_archetype_roundtrip(self):
+        intruder = _make_intruder(archetype_name="Eidolon")
         data = _serialize_intruder(intruder)
         restored = _deserialize_intruder(data)
-        assert restored.frenzy_active is True
-
-    def test_underworld_archetype_roundtrip(self):
-        intruder = _make_intruder(
-            archetype_name="Boremite", is_underworlder=True,
-        )
-        data = _serialize_intruder(intruder)
-        restored = _deserialize_intruder(data)
-        assert restored.archetype.name == "Boremite"
-        assert restored.is_underworlder is True
+        assert restored.archetype.name == "Eidolon"
 
     def test_level_and_status_preserved(self):
         from dungeon_builder.intruders.archetypes import IntruderStatus
@@ -373,6 +357,7 @@ class TestIntruderSerialization:
             "archetype_name": "NonexistentType",
             "x": 0, "y": 0, "z": 0,
             "hp": 10, "max_hp": 10,
+            "shield_hp": 0,
             "state": "ADVANCING",
             "objective": "DESTROY_CORE",
             "path": None,
@@ -386,14 +371,18 @@ class TestIntruderSerialization:
             "interaction_type": None,
             "interaction_target": None,
             "interaction_ticks": 0,
-            "frenzy_active": False,
             "loot_count": 0,
-            "is_underworlder": False,
             "level": 1,
             "status": "GRUNT",
             "morale": 0.5,
+            "food": 10.0,
+            "water": 8.0,
+            "maps_collected": 0,
+            "entertainment": 1.0,
             "personal_map": {"seen": {}, "hazards": [], "treasures": [],
                              "doors": {}, "baits": [], "alarms": []},
+            "equipment": {"base_slots": 3, "gear": [], "inventory": []},
+            "familiars": [],
             "dig_progress": {},
         }
         assert _deserialize_intruder(data) is None
@@ -591,7 +580,7 @@ class TestSaveLoadRoundtrip:
         gs, vg, core, ms, bs, tm, ai = _make_subsystems()
         i1 = _make_intruder(intruder_id=1, x=5, y=5, z=0, hp=80)
         i2 = _make_intruder(intruder_id=2, x=10, y=10, z=1,
-                            archetype_name="Shadowblade", state_name="PILLAGING")
+                            archetype_name="Explorer", state_name="PILLAGING")
         ai.intruders = [i1, i2]
         ai._next_id = 3
         path = tmp_path / "test.dungeon"
@@ -605,13 +594,13 @@ class TestSaveLoadRoundtrip:
         assert len(sd.intruders) == 2
         assert sd.intruders[0].id == 1
         assert sd.intruders[0].hp == 80
-        assert sd.intruders[1].archetype.name == "Shadowblade"
+        assert sd.intruders[1].archetype.name == "Explorer"
         assert sd.next_intruder_id == 3
 
     def test_parties_roundtrip(self, tmp_path):
         gs, vg, core, ms, bs, tm, ai = _make_subsystems()
         i1 = _make_intruder(intruder_id=1)
-        i2 = _make_intruder(intruder_id=2, archetype_name="Warden")
+        i2 = _make_intruder(intruder_id=2, archetype_name="Gloomwarden")
         party = _make_party(1, [i1, i2])
         ai.intruders = [i1, i2]
         ai.parties = [party]
@@ -628,13 +617,16 @@ class TestSaveLoadRoundtrip:
         assert set(sd.parties[0]["member_ids"]) == {1, 2}
         assert sd.next_party_id == 2
 
-    def test_underworld_parties_roundtrip(self, tmp_path):
+    def test_multiple_parties_roundtrip(self, tmp_path):
         gs, vg, core, ms, bs, tm, ai = _make_subsystems()
-        i1 = _make_intruder(intruder_id=1, archetype_name="Boremite",
-                            is_underworlder=True)
-        party = _make_party(1, [i1])
-        ai.intruders = [i1]
-        ai._underworld_parties = [party]
+        i1 = _make_intruder(intruder_id=1, archetype_name="Eidolon")
+        i2 = _make_intruder(intruder_id=2, archetype_name="Eidolon")
+        i3 = _make_intruder(intruder_id=3, archetype_name="Alchemist")
+        party1 = _make_party(1, [i1, i2])
+        party2 = _make_party(2, [i3])
+        ai.intruders = [i1, i2, i3]
+        ai.parties = [party1, party2]
+        ai._next_party_id = 3
         path = tmp_path / "test.dungeon"
         SaveSystem.save(
             path,
@@ -643,8 +635,10 @@ class TestSaveLoadRoundtrip:
             time_manager=tm,
         )
         sd = SaveSystem.load(path)
-        assert len(sd.underworld_parties) == 1
-        assert sd.underworld_parties[0]["member_ids"] == [1]
+        assert len(sd.parties) == 2
+        assert set(sd.parties[0]["member_ids"]) == {1, 2}
+        assert sd.parties[1]["member_ids"] == [3]
+        assert sd.next_party_id == 3
 
     def test_spawning_enabled_roundtrip(self, tmp_path):
         gs, vg, core, ms, bs, tm, ai = _make_subsystems()
@@ -849,7 +843,7 @@ class TestApply:
     def test_apply_restores_intruders_and_parties(self, tmp_path):
         gs, vg, core, ms, bs, tm, ai = _make_subsystems()
         i1 = _make_intruder(intruder_id=1, hp=50)
-        i2 = _make_intruder(intruder_id=2, archetype_name="Warden")
+        i2 = _make_intruder(intruder_id=2, archetype_name="Gloomwarden")
         party = _make_party(1, [i1, i2])
         ai.intruders = [i1, i2]
         ai.parties = [party]
@@ -905,7 +899,6 @@ class TestApply:
     def test_apply_resets_spawn_timers(self, tmp_path):
         gs, vg, core, ms, bs, tm, ai = _make_subsystems()
         ai._spawn_timer = 999
-        ai._underworld_spawn_timer = 888
         path = tmp_path / "test.dungeon"
         SaveSystem.save(
             path,
@@ -924,7 +917,6 @@ class TestApply:
         )
         # Timers are reset, not restored
         assert ai2._spawn_timer == 0
-        assert ai2._underworld_spawn_timer == 0
 
     def test_apply_game_state_fields(self, tmp_path):
         gs, vg, core, ms, bs, tm, ai = _make_subsystems()

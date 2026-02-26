@@ -1,7 +1,5 @@
 """Tests for VoxelWorldRenderer render mode switching and RenderModeSelector."""
 
-import inspect
-
 import pytest
 
 from dungeon_builder.core.event_bus import EventBus

@@ -1,7 +1,11 @@
 """Intruder visual rendering using simple procedural cubes.
 
 Each archetype gets a distinct color so the player can identify types at a
-glance.  Frenzied Goreclaws flash bright red.
+glance.  Intruder nodes are attached to the layer system so they inherit
+z-level alpha transparency, matching the voxel depth-fade.
+
+Dependencies: config, core.event_bus, intruders.agent, rendering.layer_slice
+Dependents: main (wiring), tests/rendering/test_intruder_renderer.py
 """
 
 from __future__ import annotations
@@ -23,12 +27,12 @@ from direct.showbase.ShowBase import ShowBase
 from dungeon_builder.config import (
     ARCHETYPE_COLORS,
     ARCHETYPE_DEFAULT_COLOR,
-    ARCHETYPE_FRENZY_COLOR,
 )
 
 if TYPE_CHECKING:
     from dungeon_builder.core.event_bus import EventBus
     from dungeon_builder.intruders.agent import Intruder
+    from dungeon_builder.rendering.layer_slice import LayerSliceManager
 
 logger = logging.getLogger("dungeon_builder.rendering.intruders")
 
@@ -84,28 +88,41 @@ def _archetype_color(intruder: Intruder) -> tuple[float, float, float]:
 class IntruderRenderer:
     """Renders intruders as colored cubes, updates positions via events.
 
-    Each archetype gets a unique color.  Frenzied intruders swap to the
-    frenzy color.
+    Each archetype gets a unique color.  Intruder nodes are parented to the
+    layer system so they inherit z-level alpha transparency.
     """
 
-    def __init__(self, app: ShowBase, event_bus: EventBus) -> None:
+    def __init__(
+        self,
+        app: ShowBase,
+        event_bus: EventBus,
+        layer_manager: LayerSliceManager | None = None,
+    ) -> None:
         self.app = app
         self.event_bus = event_bus
+        self._layer_manager = layer_manager
         self._models: dict[int, NodePath] = {}
-        self._base_colors: dict[int, tuple[float, float, float]] = {}
 
         event_bus.subscribe("intruder_spawned", self._on_spawn)
         event_bus.subscribe("intruder_moved", self._on_moved)
-        event_bus.subscribe("intruder_died", self._on_died)
-        event_bus.subscribe("intruder_escaped", self._on_escaped)
+        event_bus.subscribe("intruder_died", self._on_removed)
+        event_bus.subscribe("intruder_escaped", self._on_removed)
+
+    # ── Helpers ────────────────────────────────────────────────────────
+
+    def _get_parent(self, z: int) -> NodePath:
+        """Return the layer NodePath for the given z, or app.render as fallback."""
+        if self._layer_manager is not None:
+            return self._layer_manager.get_layer(z)
+        return self.app.render
 
     # ── Event handlers ────────────────────────────────────────────────
 
     def _on_spawn(self, intruder: Intruder) -> None:
         rgb = _archetype_color(intruder)
-        self._base_colors[intruder.id] = rgb
         node = _make_cube_geom(*rgb, size=0.6)
-        np = self.app.render.attach_new_node(node)
+        parent = self._get_parent(intruder.z)
+        np = parent.attach_new_node(node)
         np.set_pos(intruder.x + 0.5, intruder.y + 0.5, -intruder.z + 0.5)
         self._models[intruder.id] = np
 
@@ -113,38 +130,17 @@ class IntruderRenderer:
         np = self._models.get(intruder.id)
         if not np:
             return
+
+        # Reparent to correct layer if z changed
+        parent = self._get_parent(intruder.z)
+        if np.get_parent() != parent:
+            np.reparent_to(parent)
+
         np.set_pos(intruder.x + 0.5, intruder.y + 0.5, -intruder.z + 0.5)
 
-        # Frenzy visual: swap the model color if frenzy just changed
-        if intruder.frenzy_active:
-            self._swap_color(intruder.id, ARCHETYPE_FRENZY_COLOR)
-        else:
-            base = self._base_colors.get(intruder.id, ARCHETYPE_DEFAULT_COLOR)
-            self._swap_color(intruder.id, base)
-
-    def _on_died(self, intruder: Intruder, **kwargs) -> None:
+    def _on_removed(self, intruder: Intruder, **kwargs) -> None:
+        """Handle both death and escape — clean up the visual node."""
         np = self._models.pop(intruder.id, None)
         if np:
             np.remove_node()
-        self._base_colors.pop(intruder.id, None)
 
-    def _on_escaped(self, intruder: Intruder, **kwargs) -> None:
-        np = self._models.pop(intruder.id, None)
-        if np:
-            np.remove_node()
-        self._base_colors.pop(intruder.id, None)
-
-    # ── Internal helpers ──────────────────────────────────────────────
-
-    def _swap_color(self, intruder_id: int, rgb: tuple[float, float, float]) -> None:
-        """Replace the intruder's cube with a new color (cheap since it's
-        just one small 24-vertex geom)."""
-        old = self._models.get(intruder_id)
-        if not old:
-            return
-        pos = old.get_pos()
-        old.remove_node()
-        node = _make_cube_geom(*rgb, size=0.6)
-        np = self.app.render.attach_new_node(node)
-        np.set_pos(pos)
-        self._models[intruder_id] = np

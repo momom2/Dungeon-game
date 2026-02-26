@@ -1,4 +1,16 @@
-"""Intruder AI decision engine tests."""
+"""Intruder AI decision engine tests.
+
+Tests cover the IntruderAI state machine: spawning, vision, movement,
+retreat, door interaction, spike interaction, treasure collection,
+lava death, tarp fall, attacking, death handling, game over, cleanup,
+and pillaging.
+
+Dependencies: core.event_bus, world.voxel_grid, world.pathfinding,
+    dungeon_core.core, intruders.agent, intruders.archetypes,
+    intruders.personal_map, intruders.decision, intruders.party,
+    utils.rng, config
+Dependents: (none — test-only)
+"""
 
 import pytest
 
@@ -9,14 +21,14 @@ from dungeon_builder.dungeon_core.core import DungeonCore
 from dungeon_builder.intruders.agent import Intruder, IntruderState
 from dungeon_builder.intruders.archetypes import (
     IntruderObjective,
-    VANGUARD,
-    SHADOWBLADE,
-    TUNNELER,
-    PYREMANCER,
-    WINDCALLER,
-    WARDEN,
-    GORECLAW,
-    GLOOMSEER,
+    EXPLORER,
+    INQUISITOR,
+    GLOOMWARDEN,
+    MOLE_TAMER,
+    EIDOLON,
+    ALCHEMIST,
+    CARTOMANCER,
+    HERO,
 )
 from dungeon_builder.intruders.personal_map import PersonalMap
 from dungeon_builder.intruders.decision import IntruderAI
@@ -38,17 +50,15 @@ from dungeon_builder.config import (
     TREASURE_GRAB_TICKS,
     DIG_DURATION,
     SPIKE_DAMAGE,
-    PYREMANCER_HEAT_AMOUNT,
-    PYREMANCER_HEAT_INTERVAL,
     INTRUDER_PARTY_SPAWN_INTERVAL,
     MAX_PARTIES,
 )
 
 
-# ── Helpers ────────────────────────────────────────────────────────────
+# -- Helpers ---------------------------------------------------------------
 
 
-# Core depth below surface — all helpers use SURFACE_Z + _CORE_DEPTH
+# Core depth below surface -- all helpers use SURFACE_Z + _CORE_DEPTH
 _CORE_DEPTH = 3
 
 
@@ -115,7 +125,7 @@ def _make_ai(grid=None, core_pos=None, core_hp=100, seed=42):
 
 
 def _make_intruder(
-    intruder_id=1, x=0, y=0, z=None, arch=VANGUARD,
+    intruder_id=1, x=0, y=0, z=None, arch=INQUISITOR,
     objective=IntruderObjective.DESTROY_CORE,
 ):
     if z is None:
@@ -123,7 +133,7 @@ def _make_intruder(
     return Intruder(intruder_id, x, y, z, arch, objective, PersonalMap())
 
 
-# ── Party spawning ─────────────────────────────────────────────────────
+# -- Party spawning --------------------------------------------------------
 
 
 class TestPartySpawning:
@@ -168,7 +178,7 @@ class TestPartySpawning:
         assert len(ai.intruders) == 0
 
 
-# ── Vision integration ─────────────────────────────────────────────────
+# -- Vision integration ----------------------------------------------------
 
 
 class TestVisionIntegration:
@@ -183,33 +193,19 @@ class TestVisionIntegration:
         assert intruder.personal_map.is_revealed(5, 0, SURFACE_Z)
         assert len(intruder.personal_map) > 1
 
-    def test_gloomseer_arcane_sight(self):
+    def test_gloomwarden_arcane_sight(self):
         ai, bus, grid, core, rng = _make_ai()
-        intruder = _make_intruder(1, 5, 0, SURFACE_Z, arch=GLOOMSEER)
+        intruder = _make_intruder(1, 5, 0, SURFACE_Z, arch=GLOOMWARDEN)
         intruder.state = IntruderState.ADVANCING
         ai.intruders.append(intruder)
 
         ai._update_vision(intruder)
 
-        # Gloomseer sees through walls via arcane sight (range=6)
+        # Gloomwarden sees through walls via arcane sight (range=3)
         assert intruder.personal_map.is_revealed(5, 0, SURFACE_Z + _CORE_DEPTH)
 
-    def test_pyremancer_thermal_vision(self):
-        ai, bus, grid, core, rng = _make_ai()
-        grid.grid[3, 0, SURFACE_Z] = VOXEL_LAVA
-        grid.temperature[3, 0, SURFACE_Z] = 1000.0
 
-        intruder = _make_intruder(1, 5, 0, SURFACE_Z, arch=PYREMANCER)
-        intruder.state = IntruderState.ADVANCING
-        ai.intruders.append(intruder)
-
-        ai._update_vision(intruder)
-
-        # Within thermal range (dist 2 <= 4) and above threshold
-        assert intruder.personal_map.is_revealed(3, 0, SURFACE_Z)
-
-
-# ── Movement and path following ────────────────────────────────────────
+# -- Movement and path following -------------------------------------------
 
 
 class TestMovement:
@@ -237,7 +233,7 @@ class TestMovement:
         intruder.path = [(5, 0, SURFACE_Z), (5, 1, SURFACE_Z)]
         intruder.path_index = 1
         intruder.state = IntruderState.ADVANCING
-        intruder.move_interval = 1  # Now uses instance variable
+        intruder.move_interval = 1
         ai.intruders.append(intruder)
 
         moves = []
@@ -249,31 +245,41 @@ class TestMovement:
         assert intruder.pos == (5, 1, SURFACE_Z)
 
 
-# ── Retreat behavior ───────────────────────────────────────────────────
+# -- Retreat behavior ------------------------------------------------------
 
 
 class TestRetreat:
-    def test_vanguard_retreats_below_threshold(self):
+    def test_inquisitor_retreats_below_threshold(self):
         ai, bus, grid, core, rng = _make_ai()
         intruder = _make_intruder(1, 5, 3, SURFACE_Z + _CORE_DEPTH)
         intruder.state = IntruderState.ADVANCING
-        intruder.path = ai.pathfinder.find_path((5, 3, SURFACE_Z + _CORE_DEPTH), (5, 5, SURFACE_Z + _CORE_DEPTH))
+        intruder.path = ai.pathfinder.find_path(
+            (5, 3, SURFACE_Z + _CORE_DEPTH), (5, 5, SURFACE_Z + _CORE_DEPTH),
+        )
         intruder.path_index = 1
         intruder.move_interval = 1
         ai.intruders.append(intruder)
 
-        # Vanguard retreat_threshold=0.15, max_hp=120 -> retreat at <18 HP
+        # INQUISITOR retreat_threshold=0.10, max_hp=120 -> retreat at <12 HP
         intruder.hp = 10
         ai._update_intruder(intruder)
         assert intruder.state == IntruderState.RETREATING
 
-    def test_goreclaw_never_retreats(self):
+    def test_hero_never_retreats_on_hp(self):
         ai, bus, grid, core, rng = _make_ai()
-        intruder = _make_intruder(1, 5, 3, SURFACE_Z + _CORE_DEPTH, arch=GORECLAW)
+        intruder = _make_intruder(
+            1, 5, 3, SURFACE_Z + _CORE_DEPTH, arch=HERO,
+        )
         intruder.state = IntruderState.ADVANCING
-        intruder.path = [(5, 3, SURFACE_Z + _CORE_DEPTH), (5, 4, SURFACE_Z + _CORE_DEPTH)]
+        intruder.path = [
+            (5, 3, SURFACE_Z + _CORE_DEPTH),
+            (5, 4, SURFACE_Z + _CORE_DEPTH),
+        ]
         intruder.path_index = 1
         intruder.move_interval = 1
+        # Give plenty of supplies so supply-based retreat does not trigger
+        intruder.food = 999.0
+        intruder.water = 999.0
         ai.intruders.append(intruder)
 
         intruder.hp = 1
@@ -301,33 +307,7 @@ class TestRetreat:
         assert len(escaped) == 1
 
 
-# ── Frenzy behavior ───────────────────────────────────────────────────
-
-
-class TestFrenzy:
-    def test_goreclaw_enters_frenzy_at_half_hp(self):
-        ai, bus, grid, core, rng = _make_ai()
-        intruder = _make_intruder(1, 5, 0, SURFACE_Z, arch=GORECLAW)
-        intruder.state = IntruderState.ADVANCING
-        ai.intruders.append(intruder)
-
-        intruder.hp = 45  # 45/90 = 0.5, threshold is 0.5
-        IntruderAI._check_frenzy(intruder)
-        assert intruder.frenzy_active is True
-
-    def test_frenzy_doubles_speed(self):
-        intruder = _make_intruder(1, 5, 0, SURFACE_Z, arch=GORECLAW)
-        intruder.frenzy_active = True
-        assert intruder.effective_speed == GORECLAW.speed * 2
-        assert intruder.effective_move_interval == max(1, GORECLAW.move_interval // 2)
-
-    def test_frenzy_boosts_damage(self):
-        intruder = _make_intruder(1, 5, 0, SURFACE_Z, arch=GORECLAW)
-        intruder.frenzy_active = True
-        assert intruder.effective_damage == int(GORECLAW.damage * 1.5)
-
-
-# ── Door interaction ───────────────────────────────────────────────────
+# -- Door interaction ------------------------------------------------------
 
 
 class TestDoorInteraction:
@@ -344,12 +324,12 @@ class TestDoorInteraction:
         grid.block_state[5, 2, core_z] = 1  # Closed
         return grid
 
-    def test_vanguard_bashes_closed_door(self):
+    def test_inquisitor_bashes_closed_door(self):
         grid = self._setup_door()
         ai, bus, _, core, rng = _make_ai(grid=grid)
         core_z = SURFACE_Z + _CORE_DEPTH
 
-        intruder = _make_intruder(1, 5, 1, core_z, arch=VANGUARD)
+        intruder = _make_intruder(1, 5, 1, core_z, arch=INQUISITOR)
         intruder.state = IntruderState.ADVANCING
         intruder.path = [(5, 1, core_z), (5, 2, core_z), (5, 3, core_z)]
         intruder.path_index = 1
@@ -360,14 +340,16 @@ class TestDoorInteraction:
 
         assert intruder.state == IntruderState.INTERACTING
         assert intruder.interaction_type == "bash_door"
-        assert intruder.interaction_ticks == DOOR_BASH_TICKS
+        # INQUISITOR damage=8, so bash_ticks = max(1, DOOR_BASH_TICKS - 8//2)
+        expected_bash_ticks = max(1, DOOR_BASH_TICKS - INQUISITOR.damage // 2)
+        assert intruder.interaction_ticks == expected_bash_ticks
 
-    def test_shadowblade_lockpicks_closed_door(self):
+    def test_explorer_lockpicks_closed_door(self):
         grid = self._setup_door()
         ai, bus, _, core, rng = _make_ai(grid=grid)
         core_z = SURFACE_Z + _CORE_DEPTH
 
-        intruder = _make_intruder(1, 5, 1, core_z, arch=SHADOWBLADE)
+        intruder = _make_intruder(1, 5, 1, core_z, arch=EXPLORER)
         intruder.state = IntruderState.ADVANCING
         intruder.path = [(5, 1, core_z), (5, 2, core_z), (5, 3, core_z)]
         intruder.path_index = 1
@@ -385,7 +367,7 @@ class TestDoorInteraction:
         ai, bus, _, core, rng = _make_ai(grid=grid)
         core_z = SURFACE_Z + _CORE_DEPTH
 
-        intruder = _make_intruder(1, 5, 1, core_z, arch=VANGUARD)
+        intruder = _make_intruder(1, 5, 1, core_z, arch=INQUISITOR)
         intruder.state = IntruderState.ADVANCING
         intruder.path = [(5, 1, core_z), (5, 2, core_z), (5, 3, core_z)]
         intruder.path_index = 1
@@ -395,18 +377,20 @@ class TestDoorInteraction:
         ai._update_advancing(intruder)
         assert intruder.state == IntruderState.INTERACTING
 
-        for _ in range(DOOR_BASH_TICKS):
+        expected_bash_ticks = max(1, DOOR_BASH_TICKS - INQUISITOR.damage // 2)
+        for _ in range(expected_bash_ticks):
             ai._update_interacting(intruder)
 
         assert grid.block_state[5, 2, core_z] == 0
         assert intruder.state == IntruderState.ADVANCING
 
 
-# ── Spike interaction ──────────────────────────────────────────────────
+# -- Spike interaction -----------------------------------------------------
 
 
 class TestSpikeInteraction:
-    def test_vanguard_takes_half_spike_damage(self):
+    def test_inquisitor_takes_half_spike_damage(self):
+        """INQUISITOR has can_bash_door=True, so it takes half spike damage."""
         grid = _make_grid()
         for y in range(0, 5):
             grid.grid[5, y, SURFACE_Z] = VOXEL_AIR
@@ -415,7 +399,7 @@ class TestSpikeInteraction:
 
         ai, bus, _, core, rng = _make_ai(grid=grid)
 
-        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=VANGUARD)
+        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=INQUISITOR)
         intruder.state = IntruderState.ADVANCING
         intruder.path = [(5, 1, SURFACE_Z), (5, 2, SURFACE_Z), (5, 3, SURFACE_Z)]
         intruder.path_index = 1
@@ -428,12 +412,37 @@ class TestSpikeInteraction:
         assert intruder.hp == initial_hp - SPIKE_DAMAGE // 2
         assert intruder.pos == (5, 2, SURFACE_Z)
 
+    def test_explorer_detects_and_avoids_spike(self):
+        """EXPLORER has trap_detect_range=2, so it repaths around extended spikes."""
+        grid = _make_grid()
+        for y in range(0, 5):
+            grid.grid[5, y, SURFACE_Z] = VOXEL_AIR
+        grid.grid[5, 2, SURFACE_Z] = VOXEL_SPIKE
+        grid.block_state[5, 2, SURFACE_Z] = 1  # Extended
 
-# ── Tunneler digging ───────────────────────────────────────────────────
+        ai, bus, _, core, rng = _make_ai(grid=grid)
+
+        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=EXPLORER)
+        intruder.state = IntruderState.ADVANCING
+        intruder.path = [(5, 1, SURFACE_Z), (5, 2, SURFACE_Z), (5, 3, SURFACE_Z)]
+        intruder.path_index = 1
+        intruder.move_interval = 1
+        ai.intruders.append(intruder)
+
+        initial_hp = intruder.hp
+        ai._update_advancing(intruder)
+
+        # Explorer repaths rather than walking into the spike
+        assert intruder.hp == initial_hp
+        assert intruder.pos != (5, 2, SURFACE_Z)
 
 
-class TestTunnelerDigging:
-    def test_tunneler_digs_through_stone(self):
+# -- Mole Tamer (no innate digging) ---------------------------------------
+
+
+class TestMoleTamerDigging:
+    def test_mole_tamer_cannot_dig_itself(self):
+        """MOLE_TAMER has can_dig=False; familiars dig, not the tamer."""
         grid = _make_grid()
         for y in range(0, 4):
             grid.grid[5, y, SURFACE_Z] = VOXEL_AIR
@@ -441,34 +450,7 @@ class TestTunnelerDigging:
 
         ai, bus, _, core, rng = _make_ai(grid=grid)
 
-        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=TUNNELER)
-        intruder.state = IntruderState.ADVANCING
-        intruder.path = [(5, 1, SURFACE_Z), (5, 2, SURFACE_Z), (5, 3, SURFACE_Z)]
-        intruder.path_index = 1
-        intruder.move_interval = 1
-        ai.intruders.append(intruder)
-
-        digging_events = []
-        bus.subscribe("intruder_digging", lambda **kw: digging_events.append(kw))
-
-        ai._update_advancing(intruder)
-
-        assert intruder.state == IntruderState.INTERACTING
-        assert intruder.interaction_type == "dig"
-        assert len(digging_events) == 1
-
-        expected_ticks = max(1, DIG_DURATION[VOXEL_STONE] // 2)
-        assert intruder.interaction_ticks == expected_ticks
-
-    def test_tunneler_completes_dig(self):
-        grid = _make_grid()
-        for y in range(0, 4):
-            grid.grid[5, y, SURFACE_Z] = VOXEL_AIR
-        grid.grid[5, 2, SURFACE_Z] = VOXEL_DIRT
-
-        ai, bus, _, core, rng = _make_ai(grid=grid)
-
-        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=TUNNELER)
+        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=MOLE_TAMER)
         intruder.state = IntruderState.ADVANCING
         intruder.path = [(5, 1, SURFACE_Z), (5, 2, SURFACE_Z), (5, 3, SURFACE_Z)]
         intruder.path_index = 1
@@ -476,16 +458,11 @@ class TestTunnelerDigging:
         ai.intruders.append(intruder)
 
         ai._update_advancing(intruder)
-        assert intruder.state == IntruderState.INTERACTING
 
-        dig_ticks = max(1, DIG_DURATION[VOXEL_DIRT] // 2)
-        for _ in range(dig_ticks):
-            ai._update_interacting(intruder)
+        # MOLE_TAMER cannot dig, so it should repath instead of digging
+        assert intruder.state != IntruderState.INTERACTING
 
-        assert grid.get(5, 2, SURFACE_Z) == VOXEL_AIR
-        assert intruder.state == IntruderState.ADVANCING
-
-    def test_tunneler_cannot_dig_reinforced(self):
+    def test_mole_tamer_cannot_dig_reinforced(self):
         grid = _make_grid()
         for y in range(0, 4):
             grid.grid[5, y, SURFACE_Z] = VOXEL_AIR
@@ -493,7 +470,7 @@ class TestTunnelerDigging:
 
         ai, bus, _, core, rng = _make_ai(grid=grid)
 
-        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=TUNNELER)
+        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=MOLE_TAMER)
         intruder.state = IntruderState.ADVANCING
         intruder.path = [(5, 1, SURFACE_Z), (5, 2, SURFACE_Z), (5, 3, SURFACE_Z)]
         intruder.path_index = 1
@@ -505,11 +482,12 @@ class TestTunnelerDigging:
         assert intruder.state != IntruderState.INTERACTING
 
 
-# ── Treasure collection ────────────────────────────────────────────────
+# -- Treasure collection ---------------------------------------------------
 
 
 class TestTreasureCollection:
-    def test_shadowblade_collects_treasure(self):
+    def test_explorer_collects_treasure(self):
+        """EXPLORER has greed=0.7, so it stops to grab treasure."""
         grid = _make_grid()
         for y in range(0, 4):
             grid.grid[5, y, SURFACE_Z] = VOXEL_AIR
@@ -517,7 +495,7 @@ class TestTreasureCollection:
 
         ai, bus, _, core, rng = _make_ai(grid=grid)
 
-        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=SHADOWBLADE)
+        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=EXPLORER)
         intruder.state = IntruderState.ADVANCING
         intruder.path = [(5, 1, SURFACE_Z), (5, 2, SURFACE_Z), (5, 3, SURFACE_Z)]
         intruder.path_index = 1
@@ -543,7 +521,7 @@ class TestTreasureCollection:
             lambda **kw: collected_events.append(kw),
         )
 
-        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=SHADOWBLADE)
+        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=EXPLORER)
         intruder.state = IntruderState.ADVANCING
         intruder.path = [(5, 1, SURFACE_Z), (5, 2, SURFACE_Z), (5, 3, SURFACE_Z)]
         intruder.path_index = 1
@@ -560,8 +538,34 @@ class TestTreasureCollection:
         assert intruder.loot_count == 1
         assert len(collected_events) == 1
 
+    def test_inquisitor_ignores_treasure(self):
+        """INQUISITOR has greed=0.05, which is > 0, so it does collect.
 
-# ── Lava death ─────────────────────────────────────────────────────────
+        However, an intruder with greed=0 (like GLOOMWARDEN) would walk past.
+        """
+        grid = _make_grid()
+        for y in range(0, 4):
+            grid.grid[5, y, SURFACE_Z] = VOXEL_AIR
+        grid.grid[5, 2, SURFACE_Z] = VOXEL_TREASURE
+
+        ai, bus, _, core, rng = _make_ai(grid=grid)
+
+        # GLOOMWARDEN has greed=0.0, so it ignores treasure
+        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=GLOOMWARDEN)
+        intruder.state = IntruderState.ADVANCING
+        intruder.path = [(5, 1, SURFACE_Z), (5, 2, SURFACE_Z), (5, 3, SURFACE_Z)]
+        intruder.path_index = 1
+        intruder.move_interval = 1
+        ai.intruders.append(intruder)
+
+        ai._update_advancing(intruder)
+
+        # Gloomwarden walks right past treasure (greed=0.0)
+        assert intruder.pos == (5, 2, SURFACE_Z)
+        assert intruder.state == IntruderState.ADVANCING
+
+
+# -- Lava death ------------------------------------------------------------
 
 
 class TestLavaDeath:
@@ -576,7 +580,7 @@ class TestLavaDeath:
         died_events = []
         bus.subscribe("intruder_died", lambda **kw: died_events.append(kw))
 
-        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=VANGUARD)
+        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=INQUISITOR)
         intruder.state = IntruderState.ADVANCING
         intruder.path = [(5, 1, SURFACE_Z), (5, 2, SURFACE_Z)]
         intruder.path_index = 1
@@ -588,7 +592,8 @@ class TestLavaDeath:
         assert intruder.state == IntruderState.DEAD
         assert len(died_events) == 1
 
-    def test_pyremancer_walks_through_lava(self):
+    def test_eidolon_flies_over_lava(self):
+        """EIDOLON has can_fly=True, so it passes over lava safely."""
         grid = _make_grid()
         for y in range(0, 4):
             grid.grid[5, y, SURFACE_Z] = VOXEL_AIR
@@ -596,11 +601,15 @@ class TestLavaDeath:
 
         ai, bus, _, core, rng = _make_ai(grid=grid)
 
-        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=PYREMANCER)
+        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=EIDOLON)
         intruder.state = IntruderState.ADVANCING
         intruder.path = [(5, 1, SURFACE_Z), (5, 2, SURFACE_Z)]
         intruder.path_index = 1
         intruder.move_interval = 1
+        # Eidolons have 0 food/water capacity but also 0 consumption rate.
+        # Give artificial supply to prevent supply-based retreat from triggering.
+        intruder.food = 999.0
+        intruder.water = 999.0
         ai.intruders.append(intruder)
 
         ai._update_advancing(intruder)
@@ -609,11 +618,11 @@ class TestLavaDeath:
         assert intruder.pos == (5, 2, SURFACE_Z)
 
 
-# ── Tarp fall ──────────────────────────────────────────────────────────
+# -- Tarp fall -------------------------------------------------------------
 
 
 class TestTarpFall:
-    def test_vanguard_falls_through_tarp(self):
+    def test_inquisitor_falls_through_tarp(self):
         grid = _make_grid()
         for y in range(0, 4):
             grid.grid[5, y, SURFACE_Z] = VOXEL_AIR
@@ -624,7 +633,7 @@ class TestTarpFall:
         fell_events = []
         bus.subscribe("intruder_fell", lambda **kw: fell_events.append(kw))
 
-        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=VANGUARD)
+        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=INQUISITOR)
         intruder.state = IntruderState.ADVANCING
         intruder.path = [(5, 1, SURFACE_Z), (5, 2, SURFACE_Z)]
         intruder.path_index = 1
@@ -637,61 +646,44 @@ class TestTarpFall:
         assert grid.get(5, 2, SURFACE_Z) == VOXEL_AIR  # Tarp destroyed
         assert (5, 2, SURFACE_Z) in intruder.personal_map.hazards
 
-
-# ── Pyremancer heating ─────────────────────────────────────────────────
-
-
-class TestPyremancerHeating:
-    def test_pyremancer_heats_adjacent_blocks(self):
+    def test_eidolon_flies_over_tarp(self):
+        """EIDOLON has can_fly=True, so it passes over tarps."""
         grid = _make_grid()
         for y in range(0, 4):
             grid.grid[5, y, SURFACE_Z] = VOXEL_AIR
+        grid.grid[5, 2, SURFACE_Z] = VOXEL_TARP
 
         ai, bus, _, core, rng = _make_ai(grid=grid)
 
-        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=PYREMANCER)
+        fell_events = []
+        bus.subscribe("intruder_fell", lambda **kw: fell_events.append(kw))
+
+        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=EIDOLON)
         intruder.state = IntruderState.ADVANCING
         intruder.path = [(5, 1, SURFACE_Z), (5, 2, SURFACE_Z)]
         intruder.path_index = 1
-        intruder.move_interval = 100
+        intruder.move_interval = 1
+        # Eidolons have 0 food/water capacity but also 0 consumption rate.
+        # Give artificial supply to prevent supply-based retreat from triggering.
+        intruder.food = 999.0
+        intruder.water = 999.0
         ai.intruders.append(intruder)
 
-        initial_temp = float(grid.temperature[5, 2, SURFACE_Z])
-        ai._tick_pyremancer_heat(intruder, PYREMANCER_HEAT_INTERVAL)
+        ai._update_advancing(intruder)
 
-        assert grid.temperature[5, 2, SURFACE_Z] == pytest.approx(
-            initial_temp + PYREMANCER_HEAT_AMOUNT
-        )
+        assert len(fell_events) == 0
+        assert intruder.pos == (5, 2, SURFACE_Z)
 
 
-# ── Attacking behavior ────────────────────────────────────────────────
+# -- Attacking behavior ----------------------------------------------------
 
 
 class TestAttacking:
-    def test_ranged_attacker_attacks_from_distance(self):
-        ai, bus, grid, core, rng = _make_ai()
-        core_z = SURFACE_Z + _CORE_DEPTH
-
-        # Pyremancer has attack_range=3, core at (5,5,core_z)
-        # Place intruder at (5,2,core_z) with path to (5,3,core_z)
-        intruder = _make_intruder(1, 5, 2, core_z, arch=PYREMANCER)
-        intruder.state = IntruderState.ADVANCING
-        intruder.path = [(5, 2, core_z), (5, 3, core_z)]
-        intruder.path_index = 1
-        intruder.move_interval = 1
-        ai.intruders.append(intruder)
-
-        # Need to first move to (5,3,core_z), then check attack range
-        ai._update_advancing(intruder)
-
-        # After moving to (5,3,core_z), distance to core (5,5,core_z) is 2 <= 3
-        assert intruder.pos == (5, 3, core_z)
-        assert intruder.state == IntruderState.ATTACKING
-
-    def test_core_takes_damage_from_attacking_intruder(self):
+    def test_core_takes_damage_from_attacking_inquisitor(self):
         ai, bus, grid, core, rng = _make_ai()
 
-        intruder = _make_intruder(1, 5, 5, SURFACE_Z + _CORE_DEPTH, arch=VANGUARD)
+        # INQUISITOR has damage=8
+        intruder = _make_intruder(1, 5, 5, SURFACE_Z + _CORE_DEPTH, arch=INQUISITOR)
         intruder.state = IntruderState.ATTACKING
         intruder.attack_interval = 1
         ai.intruders.append(intruder)
@@ -699,25 +691,28 @@ class TestAttacking:
         for _ in range(5):
             ai._update_attacking(intruder)
 
-        assert core.hp == 60  # 5 * 8 = 40 damage
+        # 5 attacks x 8 damage (INQUISITOR base damage) = 40 damage
+        assert core.hp == 60
 
-    def test_frenzy_goreclaw_does_extra_damage(self):
+    def test_hero_does_heavy_damage(self):
+        """HERO has damage=20 and attack_interval=15."""
         ai, bus, grid, core, rng = _make_ai()
 
-        intruder = _make_intruder(1, 5, 5, SURFACE_Z + _CORE_DEPTH, arch=GORECLAW)
+        intruder = _make_intruder(
+            1, 5, 5, SURFACE_Z + _CORE_DEPTH, arch=HERO,
+        )
         intruder.state = IntruderState.ATTACKING
         intruder.attack_interval = 1
-        intruder.frenzy_active = True
         ai.intruders.append(intruder)
 
         for _ in range(3):
             ai._update_attacking(intruder)
 
-        expected_hp = 100 - 3 * int(GORECLAW.damage * 1.5)
-        assert core.hp == expected_hp
+        # 3 attacks x 20 damage (HERO base damage) = 60
+        assert core.hp == 40
 
 
-# ── Death handling ─────────────────────────────────────────────────────
+# -- Death handling --------------------------------------------------------
 
 
 class TestDeathHandling:
@@ -736,18 +731,20 @@ class TestDeathHandling:
     def test_party_notified_on_member_death(self):
         ai, bus, grid, core, rng = _make_ai()
 
-        m1 = _make_intruder(1, 5, 0, SURFACE_Z, arch=WARDEN)
-        m2 = _make_intruder(2, 5, 1, SURFACE_Z, arch=VANGUARD)
+        m1 = _make_intruder(1, 5, 0, SURFACE_Z, arch=GLOOMWARDEN)
+        m2 = _make_intruder(2, 5, 1, SURFACE_Z, arch=INQUISITOR)
         party = Party(1, [m1, m2])
         ai.parties.append(party)
         ai.intruders.extend([m1, m2])
 
+        initial_morale = m2.morale
         ai._on_intruder_death(m1)
 
-        assert m2.loyalty_modifier < 0
+        # Ally death applies MORALE_ALLY_DEATH_PENALTY to survivors
+        assert m2.morale < initial_morale
 
 
-# ── Game over ──────────────────────────────────────────────────────────
+# -- Game over -------------------------------------------------------------
 
 
 class TestGameOver:
@@ -762,7 +759,7 @@ class TestGameOver:
         assert len(ai.intruders) == 0
 
 
-# ── Cleanup ────────────────────────────────────────────────────────────
+# -- Cleanup ---------------------------------------------------------------
 
 
 class TestCleanup:
@@ -790,7 +787,7 @@ class TestCleanup:
         assert len(ai.parties) == 0
 
 
-# ── Pillaging ──────────────────────────────────────────────────────────
+# -- Pillaging -------------------------------------------------------------
 
 
 class TestPillaging:
@@ -802,8 +799,10 @@ class TestPillaging:
 
         ai, bus, _, core, rng = _make_ai(grid=grid)
 
-        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=SHADOWBLADE,
-                                   objective=IntruderObjective.PILLAGE)
+        intruder = _make_intruder(
+            1, 5, 1, SURFACE_Z, arch=EXPLORER,
+            objective=IntruderObjective.PILLAGE,
+        )
         intruder.state = IntruderState.PILLAGING
         intruder.move_interval = 1
         ai.intruders.append(intruder)
@@ -826,8 +825,10 @@ class TestPillaging:
 
         ai, bus, _, core, rng = _make_ai(grid=grid)
 
-        intruder = _make_intruder(1, 5, 1, SURFACE_Z, arch=SHADOWBLADE,
-                                   objective=IntruderObjective.PILLAGE)
+        intruder = _make_intruder(
+            1, 5, 1, SURFACE_Z, arch=EXPLORER,
+            objective=IntruderObjective.PILLAGE,
+        )
         intruder.state = IntruderState.PILLAGING
         intruder.move_interval = 1
         # Reveal some cells so retreat pathfinding works
@@ -840,9 +841,9 @@ class TestPillaging:
         assert intruder.state == IntruderState.RETREATING
 
 
-# ══════════════════════════════════════════════════════════════════════
-# Tests from test_intruder_ai.py
-# ══════════════════════════════════════════════════════════════════════
+# =========================================================================
+# Tests from test_intruder_ai.py (migrated to new archetypes)
+# =========================================================================
 
 
 def test_intruder_spawns():
@@ -857,13 +858,17 @@ def test_intruder_spawns():
     spawned = []
     bus.subscribe("intruder_spawned", lambda **kw: spawned.append(kw))
 
-    # Force spawn
-    ai._spawn_intruder()
+    # Force spawn a party
+    ai._spawn_party()
 
-    assert len(ai.intruders) == 1
-    assert ai.intruders[0].state == IntruderState.ADVANCING
-    # Archetype should be VANGUARD (transitional default)
-    assert ai.intruders[0].archetype.name == "Vanguard"
+    assert len(ai.intruders) > 0
+    assert all(i.state == IntruderState.ADVANCING for i in ai.intruders)
+    # All spawned intruders should have a valid archetype name
+    for intruder in ai.intruders:
+        assert intruder.archetype.name in (
+            "Explorer", "Inquisitor", "Gloomwarden", "Mole Tamer",
+            "Eidolon", "Alchemist", "Cartomancer", "Hero",
+        )
 
 
 def test_intruder_follows_path():
@@ -893,7 +898,7 @@ def test_intruder_follows_path():
             break
 
     assert intruder.state == IntruderState.ATTACKING
-    # Vanguard has attack_range=1, so it attacks from within 1 cell of the core
+    # INQUISITOR has attack_range=1, so it attacks from within 1 cell of the core
     core_z = SURFACE_Z + _CORE_DEPTH
     dist = abs(intruder.x - 5) + abs(intruder.y - 5) + abs(intruder.z - core_z)
     assert dist <= intruder.archetype.attack_range
@@ -908,7 +913,7 @@ def test_intruder_attacks_core():
 
     ai = IntruderAI(bus, grid, pf, core, rng)
 
-    # Vanguard has damage=8 and attack_interval=20
+    # INQUISITOR has damage=8 and attack_interval=20
     # Use a custom approach: set attack_interval to 1 for fast testing
     intruder = _make_intruder(1, 5, 5, SURFACE_Z + _CORE_DEPTH)
     intruder.state = IntruderState.ATTACKING
@@ -918,7 +923,7 @@ def test_intruder_attacks_core():
     for tick in range(1, 6):
         ai._update_intruder(intruder)
 
-    # 5 attacks x 8 damage (VANGUARD damage) = 40
+    # 5 attacks x 8 damage (INQUISITOR damage) = 40
     assert core.hp == 60
 
 
@@ -933,13 +938,15 @@ def test_intruder_retreats_at_low_hp():
 
     intruder = _make_intruder(1, 5, 3, SURFACE_Z + _CORE_DEPTH)
     intruder.state = IntruderState.ADVANCING
-    intruder.path = pf.find_path((5, 3, SURFACE_Z + _CORE_DEPTH), (5, 5, SURFACE_Z + _CORE_DEPTH))
+    intruder.path = pf.find_path(
+        (5, 3, SURFACE_Z + _CORE_DEPTH), (5, 5, SURFACE_Z + _CORE_DEPTH),
+    )
     intruder.path_index = 1
     intruder.move_interval = 1
     ai.intruders.append(intruder)
 
-    # VANGUARD retreat_threshold = 0.15, max_hp = 120
-    # 120 * 0.15 = 18 -> must be below 18
+    # INQUISITOR retreat_threshold = 0.10, max_hp = 120
+    # 120 * 0.10 = 12 -> must be below 12
     intruder.hp = 10
 
     ai._update_intruder(intruder)

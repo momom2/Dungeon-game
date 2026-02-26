@@ -1,4 +1,9 @@
-"""Temperature diffusion physics using vectorized NumPy operations."""
+"""Temperature diffusion physics using vectorized NumPy operations.
+
+Dependencies: config, core.event_bus, world.voxel_grid
+Dependents: main (wiring), tests/physics/test_temperature.py,
+    tests/physics/test_steam_vent.py, tests/physics/test_lava_flow.py
+"""
 
 from __future__ import annotations
 
@@ -7,7 +12,6 @@ from typing import TYPE_CHECKING
 
 from dungeon_builder.config import (
     VOXEL_AIR,
-    VOXEL_LAVA,
     VOXEL_MANA_CRYSTAL,
     VOXEL_HEAT_BEACON,
     VOXEL_STEAM_VENT,

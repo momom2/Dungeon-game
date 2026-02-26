@@ -2,6 +2,11 @@
 
 Each intruder maintains a sparse representation of the dungeon cells it has
 personally observed.  Only "seen" cells are available for pathfinding.
+
+Dependencies: config
+Dependents: core.save_system, intruders.agent, intruders.decision,
+    intruders.knowledge_archive, intruders.personal_pathfinder,
+    tests/intruders/
 """
 
 from __future__ import annotations
@@ -12,7 +17,6 @@ from dungeon_builder.config import (
     VOXEL_TARP,
     VOXEL_TREASURE,
     VOXEL_DOOR,
-    VOXEL_GOLD_BAIT,
     VOXEL_PRESSURE_PLATE,
     VOXEL_ALARM_BELL,
     VOXEL_FLOODGATE,

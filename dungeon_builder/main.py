@@ -55,7 +55,6 @@ from panda3d.core import (
     AmbientLight,
     DirectionalLight,
     LVector4f,
-    LVector3f,
     AntialiasAttrib,
     loadPrcFileData,
 )
@@ -66,8 +65,6 @@ loadPrcFileData("", "win-size 1280 720")
 import dungeon_builder.config as _cfg
 from dungeon_builder.config import (
     DEFAULT_SEED,
-    GRID_WIDTH,
-    GRID_DEPTH,
     VOXEL_AIR,
     VOXEL_BEDROCK,
     VOXEL_STONE,
@@ -238,9 +235,11 @@ class DungeonApp(ShowBase):
             self, event_bus, game_state, layer_manager,
             keybinding_registry=kb_registry,
         )
-        intruder_renderer = IntruderRenderer(self, event_bus)
+        intruder_renderer = IntruderRenderer(self, event_bus, layer_manager)
 
-        effects_renderer = EffectsRenderer(self, event_bus, voxel_grid=voxel_grid)
+        effects_renderer = EffectsRenderer(
+            self, event_bus, voxel_grid=voxel_grid, layer_manager=layer_manager,
+        )
         effects_renderer.place_core_marker(CORE_X, CORE_Y, CORE_Z)
 
         # ── UI ──

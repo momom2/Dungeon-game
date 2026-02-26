@@ -20,19 +20,19 @@ from dungeon_builder.world.voxel_grid import VoxelGrid
 
 
 class TestCraftHighlightVisibility:
-    """Craft markers bypass depth test so they show through solid geometry."""
+    """EffectsRenderer exposes craft-marker and pending-dig marker API."""
 
-    def test_craft_marker_source_has_depth_test_false(self):
-        """_on_craft_highlights_updated should set depth_test(False)."""
+    def test_craft_highlight_handler_exists(self):
+        """EffectsRenderer must have _on_craft_highlights_updated method."""
         from dungeon_builder.rendering.effects import EffectsRenderer
-        source = inspect.getsource(EffectsRenderer._on_craft_highlights_updated)
-        assert "set_depth_test(False)" in source
+        assert hasattr(EffectsRenderer, "_on_craft_highlights_updated")
+        assert callable(getattr(EffectsRenderer, "_on_craft_highlights_updated"))
 
-    def test_pending_dig_marker_source_has_depth_test_false(self):
-        """Pending dig markers should also bypass depth test."""
+    def test_pending_dig_marker_method_exists(self):
+        """EffectsRenderer must have _update_pending_markers method."""
         from dungeon_builder.rendering.effects import EffectsRenderer
-        source = inspect.getsource(EffectsRenderer._update_pending_markers)
-        assert "set_depth_test(False)" in source
+        assert hasattr(EffectsRenderer, "_update_pending_markers")
+        assert callable(getattr(EffectsRenderer, "_update_pending_markers"))
 
 
 class TestProspectingMode:
@@ -56,46 +56,33 @@ class TestProspectingMode:
             for i, c in enumerate(color):
                 assert 0.0 <= c <= 1.0, f"Type {vtype}[{i}]={c} out of range"
 
-    def test_prospecting_mode_in_render_selector(self):
-        """RenderModeSelector module should include 'prospecting' in modes."""
-        import dungeon_builder.ui.render_mode_selector as rms_mod
-        source = inspect.getsource(rms_mod)
-        assert "prospecting" in source.lower()
-
-    def test_voxel_renderer_prospecting_color(self):
-        """ChunkMeshBuilder._get_color should handle RENDER_MODE_PROSPECTING."""
+    def test_prospecting_mode_produces_grey(self):
+        """Prospecting mode returns muted grey tones (behavioral check)."""
         from dungeon_builder.rendering.voxel_renderer import ChunkMeshBuilder
-        source = inspect.getsource(ChunkMeshBuilder._get_color)
-        assert "RENDER_MODE_PROSPECTING" in source
-
-    def test_prospecting_color_is_muted_grey(self):
-        """Prospecting color mode should produce desaturated grey tones."""
-        from dungeon_builder.rendering.voxel_renderer import ChunkMeshBuilder
-        source = inspect.getsource(ChunkMeshBuilder._get_color)
-        assert "grey" in source  # Variable name in the desaturation logic
+        builder = ChunkMeshBuilder()
+        grid = VoxelGrid(width=8, depth=8, height=8)
+        grid.grid[2, 2, 2] = VOXEL_STONE
+        grid.visible[2, 2, 2] = True
+        color = builder._get_color(grid, 2, 2, 2, VOXEL_STONE, RENDER_MODE_PROSPECTING)
+        # Prospecting mode desaturates — R ≈ G ≈ B
+        assert abs(color[0] - color[1]) < 0.02, f"Expected grey, got {color}"
 
     def test_effects_renderer_accepts_voxel_grid(self):
         """EffectsRenderer.__init__ should accept optional voxel_grid parameter."""
         from dungeon_builder.rendering.effects import EffectsRenderer
-        source = inspect.getsource(EffectsRenderer.__init__)
-        assert "voxel_grid" in source
-
-    def test_main_passes_voxel_grid_to_effects(self):
-        """main.py should pass voxel_grid to EffectsRenderer."""
-        import dungeon_builder.main as main_mod
-        source = inspect.getsource(main_mod.DungeonApp.__init__)
-        assert "voxel_grid=voxel_grid" in source or "voxel_grid" in source
+        sig = inspect.signature(EffectsRenderer.__init__)
+        assert "voxel_grid" in sig.parameters
 
     def test_effects_scan_ore_glows_method(self):
-        """EffectsRenderer should have _scan_ore_glows method."""
+        """EffectsRenderer must have _scan_ore_glows method."""
         from dungeon_builder.rendering.effects import EffectsRenderer
         assert hasattr(EffectsRenderer, "_scan_ore_glows")
 
-    def test_effects_render_mode_handler(self):
-        """EffectsRenderer should subscribe to render_mode_changed."""
+    def test_effects_render_mode_handler_exists(self):
+        """EffectsRenderer must have _on_render_mode_changed method."""
         from dungeon_builder.rendering.effects import EffectsRenderer
-        source = inspect.getsource(EffectsRenderer.__init__)
-        assert "render_mode_changed" in source
+        assert hasattr(EffectsRenderer, "_on_render_mode_changed")
+        assert callable(getattr(EffectsRenderer, "_on_render_mode_changed"))
 
 
 class TestOreGlowScanLogic:

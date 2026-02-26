@@ -3,6 +3,9 @@
 Each entry maps a ``config.py`` attribute to a UI slider with display name,
 range, step size, and type.  The ``MainMenu`` reads these lists to build
 sliders dynamically — adding a new setting only requires a new dict entry.
+
+Dependencies: config
+Dependents: ui.main_menu, tests/ui/test_main_menu.py
 """
 
 from __future__ import annotations

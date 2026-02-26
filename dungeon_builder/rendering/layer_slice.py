@@ -2,6 +2,10 @@
 
 Asymmetric visibility: layers above the focus (ceiling) are very
 transparent, while layers below (depth) extend further with a gradual fade.
+
+Dependencies: config, core.event_bus
+Dependents: main (wiring), rendering.camera, rendering.effects,
+    rendering.intruder_renderer, rendering.voxel_renderer
 """
 
 from __future__ import annotations

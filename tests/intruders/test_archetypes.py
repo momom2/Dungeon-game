@@ -1,281 +1,235 @@
-"""Tests for intruder archetype definitions and agent model."""
+"""Tests for intruder archetype definitions, enums, and lookup tables.
+
+Dependencies: intruders.archetypes
+Dependents: (test-only)
+"""
 
 import pytest
 
 from dungeon_builder.intruders.archetypes import (
     ArchetypeStats,
     IntruderObjective,
+    IntruderStatus,
+    STATUS_TRUST,
     ALL_ARCHETYPES,
     ARCHETYPE_BY_NAME,
-    VANGUARD,
-    SHADOWBLADE,
-    TUNNELER,
-    PYREMANCER,
-    WINDCALLER,
-    WARDEN,
-    GORECLAW,
-    GLOOMSEER,
+    EXPLORER,
+    INQUISITOR,
+    GLOOMWARDEN,
+    MOLE_TAMER,
+    EIDOLON,
+    ALCHEMIST,
+    CARTOMANCER,
+    HERO,
 )
-from dungeon_builder.intruders.agent import Intruder, IntruderState
-from dungeon_builder.intruders.personal_map import PersonalMap
+
+_ALL_EIGHT_NAMES = (
+    "Explorer", "Inquisitor", "Gloomwarden", "Mole Tamer",
+    "Eidolon", "Alchemist", "Cartomancer", "Hero",
+)
+
+_ALL_EIGHT_INSTANCES = (
+    EXPLORER, INQUISITOR, GLOOMWARDEN, MOLE_TAMER,
+    EIDOLON, ALCHEMIST, CARTOMANCER, HERO,
+)
 
 
-# ── Archetype definition tests ──────────────────────────────────────
+# ── ALL_ARCHETYPES collection ──────────────────────────────────────────
 
 
-class TestArchetypeStats:
-    """Verify all 8 archetypes are correctly defined."""
+class TestAllArchetypes:
+    """Verify the ALL_ARCHETYPES tuple contains exactly the 8 archetypes."""
 
-    def test_exactly_8_archetypes(self):
+    def test_contains_exactly_8(self):
         assert len(ALL_ARCHETYPES) == 8
 
-    def test_all_unique_names(self):
+    def test_all_expected_archetypes_present(self):
+        for instance in _ALL_EIGHT_INSTANCES:
+            assert instance in ALL_ARCHETYPES
+
+    def test_all_are_archetype_stats(self):
+        for arch in ALL_ARCHETYPES:
+            assert isinstance(arch, ArchetypeStats)
+
+
+# ── ARCHETYPE_BY_NAME lookup ───────────────────────────────────────────
+
+
+class TestArchetypeByName:
+    """Verify the ARCHETYPE_BY_NAME dict maps all 8 names to correct instances."""
+
+    def test_contains_all_8_names(self):
+        assert set(ARCHETYPE_BY_NAME.keys()) == set(_ALL_EIGHT_NAMES)
+
+    @pytest.mark.parametrize(
+        "name, instance",
+        zip(_ALL_EIGHT_NAMES, _ALL_EIGHT_INSTANCES),
+        ids=_ALL_EIGHT_NAMES,
+    )
+    def test_name_maps_to_correct_instance(self, name, instance):
+        assert ARCHETYPE_BY_NAME[name] is instance
+
+
+# ── Name field on each archetype ───────────────────────────────────────
+
+
+class TestArchetypeNames:
+    """Verify each archetype instance has the expected name field."""
+
+    @pytest.mark.parametrize(
+        "instance, expected_name",
+        zip(_ALL_EIGHT_INSTANCES, _ALL_EIGHT_NAMES),
+        ids=_ALL_EIGHT_NAMES,
+    )
+    def test_archetype_name_matches(self, instance, expected_name):
+        assert instance.name == expected_name
+
+    def test_all_names_unique(self):
         names = [a.name for a in ALL_ARCHETYPES]
         assert len(names) == len(set(names))
 
-    def test_archetype_by_name_lookup(self):
+
+# ── Innate flags ───────────────────────────────────────────────────────
+
+
+class TestInnateFlags:
+    """Verify that supernatural innate traits are correctly assigned."""
+
+    def test_only_eidolon_has_phase_thickness(self):
         for arch in ALL_ARCHETYPES:
-            assert ARCHETYPE_BY_NAME[arch.name] is arch
+            if arch is EIDOLON:
+                assert arch.phase_thickness > 0, "Eidolon should phase through walls"
+            else:
+                assert arch.phase_thickness == 0, (
+                    f"{arch.name} should not have phase_thickness"
+                )
 
-    def test_archetypes_are_frozen(self):
-        with pytest.raises(AttributeError):
-            VANGUARD.hp = 999  # type: ignore[misc]
+    def test_only_mole_tamer_has_familiar_capacity(self):
+        for arch in ALL_ARCHETYPES:
+            if arch is MOLE_TAMER:
+                assert arch.familiar_capacity > 0, (
+                    "Mole Tamer should control familiars"
+                )
+            else:
+                assert arch.familiar_capacity == 0, (
+                    f"{arch.name} should not have familiar_capacity"
+                )
+
+    def test_only_hero_is_dramatic(self):
+        for arch in ALL_ARCHETYPES:
+            if arch is HERO:
+                assert arch.dramatic is True, "Hero should be dramatic"
+            else:
+                assert arch.dramatic is False, (
+                    f"{arch.name} should not be dramatic"
+                )
+
+
+# ── Objective weights ──────────────────────────────────────────────────
+
+
+class TestObjectiveWeights:
+    """Verify objective_weights on every archetype are well-formed."""
 
     @pytest.mark.parametrize("arch", ALL_ARCHETYPES, ids=lambda a: a.name)
-    def test_hp_positive(self, arch):
-        assert arch.hp > 0
+    def test_weights_are_3_tuple(self, arch):
+        assert isinstance(arch.objective_weights, tuple)
+        assert len(arch.objective_weights) == 3
 
     @pytest.mark.parametrize("arch", ALL_ARCHETYPES, ids=lambda a: a.name)
-    def test_speed_in_range(self, arch):
-        assert 1 <= arch.speed <= 4
-
-    @pytest.mark.parametrize("arch", ALL_ARCHETYPES, ids=lambda a: a.name)
-    def test_move_interval_positive(self, arch):
-        assert arch.move_interval >= 1
-
-    @pytest.mark.parametrize("arch", ALL_ARCHETYPES, ids=lambda a: a.name)
-    def test_objective_weights_sum_positive(self, arch):
+    def test_weights_sum_to_approximately_one(self, arch):
         total = sum(arch.objective_weights)
-        assert total > 0
+        assert total == pytest.approx(1.0, abs=0.01), (
+            f"{arch.name} objective_weights sum to {total}, expected ~1.0"
+        )
 
     @pytest.mark.parametrize("arch", ALL_ARCHETYPES, ids=lambda a: a.name)
-    def test_greed_in_range(self, arch):
-        assert 0.0 <= arch.greed <= 1.0
-
-    @pytest.mark.parametrize("arch", ALL_ARCHETYPES, ids=lambda a: a.name)
-    def test_loyalty_in_range(self, arch):
-        assert 0.0 <= arch.loyalty <= 1.0
-
-    @pytest.mark.parametrize("arch", ALL_ARCHETYPES, ids=lambda a: a.name)
-    def test_retreat_threshold_in_range(self, arch):
-        assert 0.0 <= arch.retreat_threshold <= 1.0
+    def test_weights_are_non_negative(self, arch):
+        for w in arch.objective_weights:
+            assert w >= 0.0, f"{arch.name} has negative objective weight {w}"
 
 
-class TestArchetypeAbilities:
-    """Verify unique archetype abilities are properly flagged."""
-
-    def test_vanguard_bashes_doors(self):
-        assert VANGUARD.can_bash_door is True
-        assert VANGUARD.can_lockpick is False
-        assert VANGUARD.can_fly is False
-        assert VANGUARD.can_dig is False
-
-    def test_shadowblade_lockpicks(self):
-        assert SHADOWBLADE.can_lockpick is True
-        assert SHADOWBLADE.can_bash_door is False
-        assert SHADOWBLADE.spike_detect_range == 2
-
-    def test_tunneler_digs(self):
-        assert TUNNELER.can_dig is True
-        assert TUNNELER.can_fly is False
-
-    def test_pyremancer_fire_immune(self):
-        assert PYREMANCER.fire_immune is True
-        assert PYREMANCER.attack_range == 3
-
-    def test_windcaller_flies(self):
-        assert WINDCALLER.can_fly is True
-        assert WINDCALLER.can_bash_door is False
-        assert WINDCALLER.can_lockpick is False
-        assert WINDCALLER.can_dig is False
-
-    def test_warden_heals(self):
-        assert WARDEN.healer is True
-        assert WARDEN.damage == 2  # Low damage
-
-    def test_goreclaw_frenzies(self):
-        assert GORECLAW.frenzy_threshold == 0.5
-        assert GORECLAW.never_retreats is True
-        assert GORECLAW.can_bash_door is True
-
-    def test_gloomseer_arcane_sight(self):
-        assert GLOOMSEER.arcane_sight_range == 6
-        assert GLOOMSEER.perception_range == 4
-
-    def test_only_one_flyer(self):
-        flyers = [a for a in ALL_ARCHETYPES if a.can_fly]
-        assert len(flyers) == 1
-        assert flyers[0] is WINDCALLER
-
-    def test_only_one_digger(self):
-        diggers = [a for a in ALL_ARCHETYPES if a.can_dig]
-        assert len(diggers) == 1
-        assert diggers[0] is TUNNELER
-
-    def test_only_one_lockpicker(self):
-        pickers = [a for a in ALL_ARCHETYPES if a.can_lockpick]
-        assert len(pickers) == 1
-        assert pickers[0] is SHADOWBLADE
-
-    def test_only_one_fire_immune(self):
-        immune = [a for a in ALL_ARCHETYPES if a.fire_immune]
-        assert len(immune) == 1
-        assert immune[0] is PYREMANCER
-
-
-# ── IntruderObjective tests ─────────────────────────────────────────
+# ── IntruderObjective enum ─────────────────────────────────────────────
 
 
 class TestIntruderObjective:
-    def test_three_objectives(self):
+    """Verify the IntruderObjective enum has expected members."""
+
+    def test_has_destroy_core(self):
+        assert hasattr(IntruderObjective, "DESTROY_CORE")
+
+    def test_has_explore(self):
+        assert hasattr(IntruderObjective, "EXPLORE")
+
+    def test_has_pillage(self):
+        assert hasattr(IntruderObjective, "PILLAGE")
+
+    def test_exactly_three_members(self):
         assert len(IntruderObjective) == 3
 
-    def test_objective_names(self):
-        names = {o.name for o in IntruderObjective}
-        assert names == {"DESTROY_CORE", "EXPLORE", "PILLAGE"}
+
+# ── IntruderStatus enum ───────────────────────────────────────────────
 
 
-# ── Intruder agent model tests ──────────────────────────────────────
+class TestIntruderStatus:
+    """Verify the IntruderStatus enum has expected members."""
+
+    def test_has_grunt(self):
+        assert hasattr(IntruderStatus, "GRUNT")
+
+    def test_has_veteran(self):
+        assert hasattr(IntruderStatus, "VETERAN")
+
+    def test_has_elite(self):
+        assert hasattr(IntruderStatus, "ELITE")
+
+    def test_has_champion(self):
+        assert hasattr(IntruderStatus, "CHAMPION")
+
+    def test_exactly_four_members(self):
+        assert len(IntruderStatus) == 4
 
 
-class TestIntruderAgent:
-    """Tests for the rewritten Intruder class."""
-
-    def test_construction_from_archetype(self):
-        i = Intruder(
-            intruder_id=1, x=10, y=20, z=3,
-            archetype=VANGUARD,
-            objective=IntruderObjective.DESTROY_CORE,
-            personal_map=PersonalMap(),
-        )
-        assert i.id == 1
-        assert i.pos == (10, 20, 3)
-        assert i.hp == 120  # VANGUARD HP
-        assert i.max_hp == 120
-        assert i.archetype is VANGUARD
-        assert i.objective == IntruderObjective.DESTROY_CORE
-        assert i.state == IntruderState.SPAWNING
-
-    def test_different_archetypes_different_hp(self):
-        v = Intruder(1, 0, 0, 0, VANGUARD, IntruderObjective.DESTROY_CORE, PersonalMap())
-        s = Intruder(2, 0, 0, 0, SHADOWBLADE, IntruderObjective.PILLAGE, PersonalMap())
-        assert v.hp == 120
-        assert s.hp == 40
-
-    def test_move_interval_from_archetype(self):
-        v = Intruder(1, 0, 0, 0, VANGUARD, IntruderObjective.DESTROY_CORE, PersonalMap())
-        w = Intruder(2, 0, 0, 0, WINDCALLER, IntruderObjective.EXPLORE, PersonalMap())
-        assert v.move_interval == 10  # VANGUARD is slow
-        assert w.move_interval == 2   # WINDCALLER is fast
-
-    def test_party_id_default_none(self):
-        i = Intruder(1, 0, 0, 0, VANGUARD, IntruderObjective.DESTROY_CORE, PersonalMap())
-        assert i.party_id is None
-
-    def test_party_id_set(self):
-        i = Intruder(1, 0, 0, 0, VANGUARD, IntruderObjective.DESTROY_CORE,
-                     PersonalMap(), party_id=42)
-        assert i.party_id == 42
-
-    def test_take_damage(self):
-        i = Intruder(1, 0, 0, 0, VANGUARD, IntruderObjective.DESTROY_CORE, PersonalMap())
-        i.state = IntruderState.ADVANCING
-        i.take_damage(30)
-        assert i.hp == 90
-        assert i.state == IntruderState.ADVANCING
-
-    def test_take_damage_kills(self):
-        i = Intruder(1, 0, 0, 0, SHADOWBLADE, IntruderObjective.PILLAGE, PersonalMap())
-        i.state = IntruderState.ADVANCING
-        i.take_damage(999)
-        assert i.hp == 0
-        assert i.state == IntruderState.DEAD
-        assert not i.alive
-
-    def test_alive_property(self):
-        i = Intruder(1, 0, 0, 0, VANGUARD, IntruderObjective.DESTROY_CORE, PersonalMap())
-        assert i.alive is True
-        i.state = IntruderState.DEAD
-        assert i.alive is False
-        i.state = IntruderState.ESCAPED
-        assert i.alive is False
-
-    def test_effective_loyalty_base(self):
-        i = Intruder(1, 0, 0, 0, VANGUARD, IntruderObjective.DESTROY_CORE, PersonalMap())
-        assert i.effective_loyalty == pytest.approx(0.9)
-
-    def test_effective_loyalty_with_modifier(self):
-        i = Intruder(1, 0, 0, 0, SHADOWBLADE, IntruderObjective.PILLAGE, PersonalMap())
-        i.loyalty_modifier = 0.2
-        assert i.effective_loyalty == pytest.approx(0.4)  # 0.2 + 0.2
-
-    def test_effective_loyalty_clamped(self):
-        i = Intruder(1, 0, 0, 0, WARDEN, IntruderObjective.DESTROY_CORE, PersonalMap())
-        i.loyalty_modifier = 0.5
-        # Warden loyalty=1.0, + 0.5 = 1.5, clamped to 1.0
-        assert i.effective_loyalty == 1.0
-
-    def test_frenzy_speed(self):
-        i = Intruder(1, 0, 0, 0, GORECLAW, IntruderObjective.DESTROY_CORE, PersonalMap())
-        assert i.effective_speed == 2
-        i.frenzy_active = True
-        assert i.effective_speed == 4
-
-    def test_frenzy_damage(self):
-        i = Intruder(1, 0, 0, 0, GORECLAW, IntruderObjective.DESTROY_CORE, PersonalMap())
-        assert i.effective_damage == 15
-        i.frenzy_active = True
-        assert i.effective_damage == 22  # int(15 * 1.5) = 22
-
-    def test_frenzy_move_interval(self):
-        i = Intruder(1, 0, 0, 0, GORECLAW, IntruderObjective.DESTROY_CORE, PersonalMap())
-        assert i.effective_move_interval == 5
-        i.frenzy_active = True
-        assert i.effective_move_interval == 2  # max(1, 5 // 2)
-
-    def test_loot_starts_zero(self):
-        i = Intruder(1, 0, 0, 0, SHADOWBLADE, IntruderObjective.PILLAGE, PersonalMap())
-        assert i.loot_count == 0
-
-    def test_dig_progress_starts_empty(self):
-        i = Intruder(1, 0, 0, 0, TUNNELER, IntruderObjective.DESTROY_CORE, PersonalMap())
-        assert i.dig_progress == {}
-
-    def test_personal_map_attached(self):
-        pm = PersonalMap()
-        i = Intruder(1, 0, 0, 0, VANGUARD, IntruderObjective.DESTROY_CORE, pm)
-        assert i.personal_map is pm
-
-    def test_repr_includes_archetype(self):
-        i = Intruder(1, 5, 10, 3, SHADOWBLADE, IntruderObjective.PILLAGE, PersonalMap())
-        r = repr(i)
-        assert "Shadowblade" in r
-        assert "5,10,3" in r
+# ── STATUS_TRUST dict ─────────────────────────────────────────────────
 
 
-# ── IntruderState tests ─────────────────────────────────────────────
+class TestStatusTrust:
+    """Verify STATUS_TRUST covers all IntruderStatus members."""
+
+    def test_all_statuses_have_trust_value(self):
+        for status in IntruderStatus:
+            assert status in STATUS_TRUST, f"{status.name} missing from STATUS_TRUST"
+
+    def test_trust_values_are_positive(self):
+        for status, trust in STATUS_TRUST.items():
+            assert trust > 0, f"{status.name} has non-positive trust {trust}"
+
+    def test_trust_increases_with_rank(self):
+        statuses = [
+            IntruderStatus.GRUNT,
+            IntruderStatus.VETERAN,
+            IntruderStatus.ELITE,
+            IntruderStatus.CHAMPION,
+        ]
+        for i in range(len(statuses) - 1):
+            lower = STATUS_TRUST[statuses[i]]
+            higher = STATUS_TRUST[statuses[i + 1]]
+            assert higher > lower, (
+                f"{statuses[i+1].name} trust ({higher}) should exceed "
+                f"{statuses[i].name} trust ({lower})"
+            )
 
 
-class TestIntruderState:
-    def test_has_all_states(self):
-        expected = {
-            "SPAWNING", "ADVANCING", "INTERACTING", "ATTACKING",
-            "RETREATING", "PILLAGING", "DEAD", "ESCAPED",
-        }
-        actual = {s.name for s in IntruderState}
-        assert actual == expected
+# ── Frozen dataclass ──────────────────────────────────────────────────
 
-    def test_new_states_exist(self):
-        """INTERACTING and PILLAGING are new in the archetype rewrite."""
-        assert IntruderState.INTERACTING
-        assert IntruderState.PILLAGING
+
+class TestArchetypeFrozen:
+    """Verify archetypes are immutable (frozen dataclass)."""
+
+    def test_cannot_modify_hp(self):
+        with pytest.raises(AttributeError):
+            EXPLORER.hp = 999  # type: ignore[misc]
+
+    def test_cannot_modify_name(self):
+        with pytest.raises(AttributeError):
+            HERO.name = "Villain"  # type: ignore[misc]

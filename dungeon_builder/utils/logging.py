@@ -1,4 +1,8 @@
-"""Game event logging for debugging and replay."""
+"""Game event logging for debugging and replay.
+
+Dependencies: (none — standalone)
+Dependents: main (wiring), tests/utils/test_logging.py
+"""
 
 from __future__ import annotations
 

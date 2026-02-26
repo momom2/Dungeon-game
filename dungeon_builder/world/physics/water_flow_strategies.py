@@ -14,6 +14,9 @@ movement, ``_pressure_lateral_transfer()`` for pressure-driven lateral flow,
 and ``_level_equalization()`` for convergence at low levels.
 
 Use :func:`create_strategy` to instantiate the active strategy by name.
+
+Dependencies: config, world.voxel_grid
+Dependents: world.physics.water, tests/physics/test_water_flow_strategies.py
 """
 
 from __future__ import annotations
@@ -59,116 +62,6 @@ class WaterFlowStrategy(Protocol):
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-def _advect_water_level(grid: "VoxelGrid") -> bool:
-    """Move water_level along the velocity field (donor-cell upwind).
-
-    Returns True if any water moved (for dirty-marking).
-
-    The scheme is first-order upwind per axis: for each cell, the outflow
-    in each direction is proportional to the velocity component in that
-    direction, capped so that a cell can't send more than it has.  A delta
-    accumulator per axis avoids double-counting.
-    """
-    voxels = grid.grid
-    water = grid.water_level
-    vx, vy, vz = grid.water_vx, grid.water_vy, grid.water_vz
-    w, d, h = grid.width, grid.depth, grid.height
-
-    water_before = (voxels == VOXEL_WATER).copy()
-
-    moved = False
-
-    # Process each of the 6 half-axes (+/-x, +/-y, +/-z).  For each axis we
-    # compute transfer from cells with positive velocity toward the
-    # neighbour in that direction.
-    for axis, vel, dim in [(0, vx, w), (1, vy, d), (2, vz, h)]:
-        if dim <= 1:
-            continue
-
-        # Build slices for source (src) and destination (dst) along *axis*.
-        # Positive velocity: src = 0..dim-2, dst = 1..dim-1
-        # Negative velocity: src = 1..dim-1, dst = 0..dim-2
-        for sign in (+1, -1):
-            if sign == 1:
-                src_sl = [slice(None)] * 3
-                dst_sl = [slice(None)] * 3
-                src_sl[axis] = slice(None, -1)
-                dst_sl[axis] = slice(1, None)
-            else:
-                src_sl = [slice(None)] * 3
-                dst_sl = [slice(None)] * 3
-                src_sl[axis] = slice(1, None)
-                dst_sl[axis] = slice(None, -1)
-            src_sl = tuple(src_sl)
-            dst_sl = tuple(dst_sl)
-
-            src_vel = vel[src_sl]
-            active_vel = src_vel * sign  # positive when pointing src->dst
-            sending = active_vel > 0
-
-            # Only send from water cells into air or water cells
-            src_water = (voxels[src_sl] == VOXEL_WATER)
-            dst_ok = (
-                (voxels[dst_sl] == VOXEL_AIR)
-                | (voxels[dst_sl] == VOXEL_WATER)
-                | (
-                    (voxels[dst_sl] == VOXEL_FLOODGATE)
-                    & (grid.block_state[dst_sl] == 0)
-                )
-            )
-            mask = sending & src_water & dst_ok
-
-            if not np.any(mask):
-                continue
-
-            # Transfer proportional to |velocity|, capped at source level
-            # and remaining capacity of destination.
-            # Allow velocities > 1 to transfer more water per tick.
-            frac = np.clip(active_vel, 0.0, 2.0)
-            src_level = water[src_sl].astype(np.int16)
-            dst_level = water[dst_sl].astype(np.int16)
-            transfer = np.where(
-                mask,
-                np.minimum(
-                    (frac * src_level).astype(np.int16),
-                    np.minimum(src_level, 255 - dst_level),
-                ),
-                np.int16(0),
-            )
-
-            if not np.any(transfer > 0):
-                continue
-
-            moved = True
-
-            # Apply
-            delta_src = np.zeros_like(water, dtype=np.int16)
-            delta_dst = np.zeros_like(water, dtype=np.int16)
-            delta_src[src_sl] -= transfer
-            delta_dst[dst_sl] += transfer
-
-            new_water = np.clip(
-                water.astype(np.int16) + delta_src + delta_dst, 0, 255
-            ).astype(np.uint8)
-            water[:] = new_water
-
-    # Bookkeeping: update VOXEL_WATER / VOXEL_AIR markers
-    became_empty = (water == 0) & (voxels == VOXEL_WATER)
-    voxels[became_empty] = VOXEL_AIR
-    became_water = (water > 0) & (voxels == VOXEL_AIR)
-    voxels[became_water] = VOXEL_WATER
-
-    # Dirty marking
-    if moved:
-        water_after = (voxels == VOXEL_WATER)
-        changed = water_before != water_after
-        if np.any(changed):
-            xs, ys, zs = np.where(changed)
-            grid.mark_blocks_dirty(xs, ys, zs)
-
-    return moved
-
 
 def _pressure_lateral_transfer(
     water: np.ndarray,
@@ -409,54 +302,6 @@ def _compute_depth_map(water_mask: np.ndarray, w: int, d: int, h: int
     reset_filled = np.maximum.accumulate(reset, axis=2)
     depth_map = cs - reset_filled
     return depth_map
-
-
-def _laplacian_scalar(field: np.ndarray, mask_f: np.ndarray,
-                      w: int, d: int, h: int) -> np.ndarray:
-    """Compute Laplacian of a scalar field at masked cells (shared helper)."""
-    lap = np.zeros((w, d, h), dtype=np.float32)
-    cnt = np.zeros((w, d, h), dtype=np.float32)
-    if w > 1:
-        lap[:-1] += field[1:] * mask_f[1:]
-        lap[1:] += field[:-1] * mask_f[:-1]
-        cnt[:-1] += mask_f[1:]
-        cnt[1:] += mask_f[:-1]
-    if d > 1:
-        lap[:, :-1] += field[:, 1:] * mask_f[:, 1:]
-        lap[:, 1:] += field[:, :-1] * mask_f[:, :-1]
-        cnt[:, :-1] += mask_f[:, 1:]
-        cnt[:, 1:] += mask_f[:, :-1]
-    if h > 1:
-        lap[:, :, :-1] += field[:, :, 1:] * mask_f[:, :, 1:]
-        lap[:, :, 1:] += field[:, :, :-1] * mask_f[:, :, :-1]
-        cnt[:, :, :-1] += mask_f[:, :, 1:]
-        cnt[:, :, 1:] += mask_f[:, :, :-1]
-    np.maximum(cnt, 1.0, out=cnt)
-    lap = lap / cnt - field
-    return lap
-
-
-def _divergence(vx: np.ndarray, vy: np.ndarray, vz: np.ndarray,
-                mask_f: np.ndarray, w: int, d: int, h: int) -> np.ndarray:
-    """Compute divergence div(v) using central differences at masked cells."""
-    div = np.zeros((w, d, h), dtype=np.float32)
-    if w > 2:
-        div[1:-1, :, :] += (vx[2:, :, :] - vx[:-2, :, :]) * 0.5
-    if w > 1:
-        div[0, :, :] += vx[1, :, :] - vx[0, :, :]
-        div[-1, :, :] += vx[-1, :, :] - vx[-2, :, :]
-    if d > 2:
-        div[:, 1:-1, :] += (vy[:, 2:, :] - vy[:, :-2, :]) * 0.5
-    if d > 1:
-        div[:, 0, :] += vy[:, 1, :] - vy[:, 0, :]
-        div[:, -1, :] += vy[:, -1, :] - vy[:, -2, :]
-    if h > 2:
-        div[:, :, 1:-1] += (vz[:, :, 2:] - vz[:, :, :-2]) * 0.5
-    if h > 1:
-        div[:, :, 0] += vz[:, :, 1] - vz[:, :, 0]
-        div[:, :, -1] += vz[:, :, -1] - vz[:, :, -2]
-    div *= mask_f
-    return div
 
 
 def _gradient_pressure(pressure: np.ndarray, solid: np.ndarray,

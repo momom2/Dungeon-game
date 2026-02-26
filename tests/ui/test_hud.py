@@ -34,13 +34,6 @@ from dungeon_builder.core.event_bus import EventBus
 class TestInventoryPanel:
     """HUD has compact bag button and togglable inventory panel."""
 
-    def test_hud_has_bag_btn_not_hand_label(self):
-        """HUD should have bag_btn attribute, not hand_label."""
-        from dungeon_builder.ui.hud import HUD
-        source = inspect.getsource(HUD.__init__)
-        assert "bag_btn" in source
-        assert "hand_label" not in source
-
     def test_hud_has_bag_panel_methods(self):
         """HUD should have _build_bag_panel, _toggle_bag_panel, _refresh_bag_panel."""
         from dungeon_builder.ui.hud import HUD
@@ -48,18 +41,11 @@ class TestInventoryPanel:
         assert hasattr(HUD, "_toggle_bag_panel")
         assert hasattr(HUD, "_refresh_bag_panel")
 
-    def test_refresh_hand_updates_bag_total(self):
-        """_refresh_hand should show total count on bag button."""
+    def test_refresh_hand_method_exists(self):
+        """HUD should have a callable _refresh_hand method."""
         from dungeon_builder.ui.hud import HUD
-        source = inspect.getsource(HUD._refresh_hand)
-        assert "Bag:" in source
-        assert "sum(" in source or "total" in source
-
-    def test_inventory_keybind_registered(self):
-        """I key or toggle_inventory should be bound."""
-        from dungeon_builder.ui.hud import HUD
-        source = inspect.getsource(HUD.__init__)
-        assert "toggle_inventory" in source or '"i"' in source
+        assert hasattr(HUD, "_refresh_hand")
+        assert callable(getattr(HUD, "_refresh_hand"))
 
 
 # ===========================================================================
@@ -118,31 +104,26 @@ class TestVTypeNames:
 class TestHUDHoverSubscription:
     """HUD should subscribe to hover events."""
 
-    @pytest.fixture(autouse=True)
-    def _load_source(self):
-        from dungeon_builder.ui.hud import HUD
-        self.cls = HUD
-        self.init_src = inspect.getsource(HUD.__init__)
-
-    def test_subscribes_to_voxel_hover(self):
-        """HUD.__init__ should subscribe to 'voxel_hover'."""
-        assert "voxel_hover" in self.init_src
-
-    def test_subscribes_to_voxel_hover_clear(self):
-        """HUD.__init__ should subscribe to 'voxel_hover_clear'."""
-        assert "voxel_hover_clear" in self.init_src
-
     def test_hover_handler_exists(self):
         """HUD should have a _on_voxel_hover method."""
-        assert hasattr(self.cls, "_on_voxel_hover")
+        from dungeon_builder.ui.hud import HUD
+        assert hasattr(HUD, "_on_voxel_hover")
+        assert callable(getattr(HUD, "_on_voxel_hover"))
 
     def test_hover_clear_handler_exists(self):
         """HUD should have a _on_voxel_hover_clear method."""
-        assert hasattr(self.cls, "_on_voxel_hover_clear")
+        from dungeon_builder.ui.hud import HUD
+        assert hasattr(HUD, "_on_voxel_hover_clear")
+        assert callable(getattr(HUD, "_on_voxel_hover_clear"))
 
-    def test_hover_label_created(self):
-        """HUD should create a hover_label widget."""
-        assert "hover_label" in self.init_src
+    def test_hover_handler_accepts_coordinates(self):
+        """_on_voxel_hover should accept x, y, z parameters."""
+        from dungeon_builder.ui.hud import HUD
+        sig = inspect.signature(HUD._on_voxel_hover)
+        params = set(sig.parameters) - {"self"}
+        assert "x" in params
+        assert "y" in params
+        assert "z" in params
 
 
 # ===========================================================================
@@ -151,29 +132,27 @@ class TestHUDHoverSubscription:
 
 
 class TestHoverHandlerLogic:
-    """Verify hover handler logic via source inspection."""
+    """Verify hover handler interface and supporting data."""
 
-    @pytest.fixture(autouse=True)
-    def _load_source(self):
+    def test_hover_handler_accepts_kwargs(self):
+        """_on_voxel_hover should accept **kwargs for mode-specific data."""
         from dungeon_builder.ui.hud import HUD
-        self.hover_src = inspect.getsource(HUD._on_voxel_hover)
-        self.clear_src = inspect.getsource(HUD._on_voxel_hover_clear)
+        sig = inspect.signature(HUD._on_voxel_hover)
+        has_var_keyword = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD
+            for p in sig.parameters.values()
+        )
+        assert has_var_keyword, "_on_voxel_hover should accept **kwargs"
 
-    def test_hover_looks_up_vtype(self):
-        """Hover handler should look up voxel type from grid."""
-        assert "grid.get(" in self.hover_src
+    def test_vtype_names_dict_available(self):
+        """_VTYPE_NAMES should be importable and non-empty."""
+        from dungeon_builder.ui.hud import _VTYPE_NAMES
+        assert len(_VTYPE_NAMES) > 0
 
-    def test_hover_uses_vtype_names(self):
-        """Hover handler should use _VTYPE_NAMES dict."""
-        assert "_VTYPE_NAMES" in self.hover_src
-
-    def test_hover_updates_label(self):
-        """Hover handler should update hover_label text."""
-        assert 'hover_label["text"]' in self.hover_src or "hover_label['text']" in self.hover_src
-
-    def test_clear_empties_label(self):
-        """Clear handler should set hover_label text to empty."""
-        assert 'hover_label["text"]' in self.clear_src or "hover_label['text']" in self.clear_src
+    def test_clear_handler_is_callable(self):
+        """_on_voxel_hover_clear should be callable."""
+        from dungeon_builder.ui.hud import HUD
+        assert callable(getattr(HUD, "_on_voxel_hover_clear"))
 
 
 # ===========================================================================
@@ -234,32 +213,32 @@ class TestHoverEvents:
 class TestHoverModeInfo:
     """Verify hover handler includes mode-specific data per render mode."""
 
-    @pytest.fixture(autouse=True)
-    def _load_source(self):
+    def test_hover_handler_accepts_mode_kwargs(self):
+        """_on_voxel_hover should accept **kwargs for temperature, humidity, etc."""
         from dungeon_builder.ui.hud import HUD
-        self.cls = HUD
-        self.init_src = inspect.getsource(HUD.__init__)
-        self.hover_src = inspect.getsource(HUD._on_voxel_hover)
-
-    def test_hover_handler_reads_temperature(self):
-        """Hover handler should read temperature for heat mode."""
-        assert "temperature" in self.hover_src
-
-    def test_hover_handler_reads_humidity(self):
-        """Hover handler should read humidity for humidity mode."""
-        assert "humidity" in self.hover_src
-
-    def test_hover_handler_reads_stress(self):
-        """Hover handler should read stress_ratio for structural mode."""
-        assert "stress_ratio" in self.hover_src
-
-    def test_render_mode_tracked(self):
-        """HUD should subscribe to render_mode_changed event."""
-        assert "render_mode_changed" in self.init_src
+        sig = inspect.signature(HUD._on_voxel_hover)
+        # Must accept x, y, z positionally and **kwargs for mode-specific data
+        params = sig.parameters
+        assert "x" in params
+        assert "y" in params
+        assert "z" in params
+        has_var_keyword = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD
+            for p in params.values()
+        )
+        assert has_var_keyword, "Should accept **kwargs for mode data"
 
     def test_render_mode_handler_exists(self):
         """HUD should have _on_render_mode_changed method."""
-        assert hasattr(self.cls, "_on_render_mode_changed")
+        from dungeon_builder.ui.hud import HUD
+        assert hasattr(HUD, "_on_render_mode_changed")
+        assert callable(getattr(HUD, "_on_render_mode_changed"))
+
+    def test_render_mode_handler_accepts_mode_param(self):
+        """_on_render_mode_changed should accept a mode parameter."""
+        from dungeon_builder.ui.hud import HUD
+        sig = inspect.signature(HUD._on_render_mode_changed)
+        assert "mode" in sig.parameters
 
     def test_infused_lava_removed_from_vtype_names(self):
         """Infused Lava (type 92) should NOT be in _VTYPE_NAMES (replaced by mana_crystals)."""

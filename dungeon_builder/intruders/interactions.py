@@ -3,6 +3,13 @@
 When an intruder is about to step onto or interact with a functional block,
 the interaction handler determines what happens: damage, timed interaction,
 repath, collection, or pass-through.
+
+All logic is flag/stat-based — no archetype name checks.  Damage reduction
+and interaction speed scale from numeric stats (``damage``, ``can_bash_door``,
+``can_fly``, etc.) rather than hard-coded archetype identities.
+
+Dependencies: config, intruders.agent (TYPE_CHECKING only)
+Dependents: intruders.decision, tests/intruders/test_interactions.py
 """
 
 from __future__ import annotations
@@ -35,7 +42,6 @@ from dungeon_builder.config import (
     SPIKE_DAMAGE,
     ROLLING_STONE_DAMAGE,
     DOOR_BASH_TICKS,
-    DOOR_BASH_TICKS_GORECLAW,
     DOOR_LOCKPICK_TICKS,
     TREASURE_GRAB_TICKS,
     TARP_DETECT_CUNNING,
@@ -58,7 +64,7 @@ class InteractionResult(Enum):
     COLLECT = auto()       # Collect item (treasure)
     FALL = auto()          # Fall through (tarp collapse)
     DEATH = auto()         # Instant death (lava for non-immune)
-    DESTROY_BLOCK = auto() # Block is destroyed (spike smash by Goreclaw)
+    DESTROY_BLOCK = auto() # Block is destroyed (e.g. spike smash)
 
 
 class InteractionInfo:
@@ -96,8 +102,12 @@ def handle_block(
 ) -> InteractionInfo:
     """Determine the interaction when *intruder* encounters *voxel_type*.
 
-    This is a pure function — it does NOT modify intruder state or the grid.
+    This is a pure function -- it does NOT modify intruder state or the grid.
     The caller (decision engine) applies the result.
+
+    All checks use archetype flags and stats (``can_fly``, ``can_bash_door``,
+    ``damage``, ``cunning``, etc.) rather than archetype name strings, so new
+    archetypes work automatically based on their stat block.
 
     Parameters
     ----------
@@ -115,11 +125,11 @@ def handle_block(
     """
     arch = intruder.archetype
 
-    # ── Air / Slope / Stairs — pass through ─────────────────────
+    # -- Air / Slope / Stairs -- pass through --------------------------
     if voxel_type in (VOXEL_AIR, VOXEL_SLOPE, VOXEL_STAIRS):
         return InteractionInfo(InteractionResult.CONTINUE)
 
-    # ── Door ────────────────────────────────────────────────────
+    # -- Door ----------------------------------------------------------
     if voxel_type == VOXEL_DOOR:
         if block_state == 0:  # Open
             return InteractionInfo(InteractionResult.CONTINUE)
@@ -131,9 +141,9 @@ def handle_block(
                 interaction_type="lockpick",
             )
         if arch.can_bash_door:
-            bash_ticks = DOOR_BASH_TICKS
-            if arch.name == "Goreclaw":
-                bash_ticks = DOOR_BASH_TICKS_GORECLAW
+            # Stronger intruders bash faster: each 2 points of damage
+            # shaves 1 tick off the base bash duration (minimum 1 tick).
+            bash_ticks = max(1, DOOR_BASH_TICKS - arch.damage // 2)
             return InteractionInfo(
                 InteractionResult.INTERACT,
                 ticks=bash_ticks,
@@ -141,42 +151,30 @@ def handle_block(
             )
         return InteractionInfo(InteractionResult.REPATH)
 
-    # ── Spike ───────────────────────────────────────────────────
+    # -- Spike ---------------------------------------------------------
     if voxel_type == VOXEL_SPIKE:
         if block_state == 0:  # Retracted
             return InteractionInfo(InteractionResult.CONTINUE)
         # Extended spike
-        # Windcaller flies over
+        # Flyers pass over
         if arch.can_fly:
             return InteractionInfo(InteractionResult.CONTINUE)
-        # Goreclaw smashes spike (takes 10 damage, destroys it)
-        if arch.frenzy_threshold > 0 and arch.name == "Goreclaw":
-            return InteractionInfo(
-                InteractionResult.DESTROY_BLOCK,
-                damage=SPIKE_DAMAGE // 2,
-            )
-        # Vanguard takes half damage
-        if arch.name == "Vanguard":
-            return InteractionInfo(
-                InteractionResult.DAMAGE,
-                damage=SPIKE_DAMAGE // 2,
-            )
-        # Stoneskin Brute takes quarter damage (stone armor)
-        if arch.name == "Stoneskin Brute":
-            return InteractionInfo(
-                InteractionResult.DAMAGE,
-                damage=SPIKE_DAMAGE // 4,
-            )
-        # Shadowblade detects and avoids (if spike_detect_range > 0)
-        if arch.spike_detect_range > 0:
+        # Trap-aware intruders detect and avoid
+        if arch.trap_detect_range > 0:
             return InteractionInfo(InteractionResult.REPATH)
+        # Armored types (can_bash_door) take half spike damage
+        if arch.can_bash_door:
+            return InteractionInfo(
+                InteractionResult.DAMAGE,
+                damage=SPIKE_DAMAGE // 2,
+            )
         # Everyone else takes full damage
         return InteractionInfo(
             InteractionResult.DAMAGE,
             damage=SPIKE_DAMAGE,
         )
 
-    # ── Treasure ────────────────────────────────────────────────
+    # -- Treasure ------------------------------------------------------
     if voxel_type == VOXEL_TREASURE:
         if arch.greed > 0:
             return InteractionInfo(
@@ -186,12 +184,12 @@ def handle_block(
             )
         return InteractionInfo(InteractionResult.CONTINUE)
 
-    # ── Tarp ────────────────────────────────────────────────────
+    # -- Tarp ----------------------------------------------------------
     if voxel_type == VOXEL_TARP:
-        # Windcaller flies over
+        # Flyers pass over
         if arch.can_fly:
             return InteractionInfo(InteractionResult.CONTINUE)
-        # Gloomseer detects via arcane sight
+        # Arcane sight detects via supernatural sense
         if arch.arcane_sight_range > 0:
             return InteractionInfo(InteractionResult.REPATH)
         # High cunning detects
@@ -200,29 +198,23 @@ def handle_block(
         # Everyone else falls through
         return InteractionInfo(InteractionResult.FALL)
 
-    # ── Rolling stone ───────────────────────────────────────────
+    # -- Rolling stone -------------------------------------------------
     if voxel_type == VOXEL_ROLLING_STONE:
-        # Windcaller flies over
+        # Flyers pass over
         if arch.can_fly:
             return InteractionInfo(InteractionResult.CONTINUE)
         # Fast intruders dodge (speed >= 3)
         if arch.speed >= 3:
             return InteractionInfo(InteractionResult.CONTINUE)
-        # Stoneskin Brute takes half damage (stone armor)
-        if arch.name == "Stoneskin Brute":
-            return InteractionInfo(
-                InteractionResult.DAMAGE,
-                damage=ROLLING_STONE_DAMAGE // 2,
-            )
-        # Everyone else takes damage
+        # Flat damage to everyone else -- no archetype-specific reductions
         return InteractionInfo(
             InteractionResult.DAMAGE,
             damage=ROLLING_STONE_DAMAGE,
         )
 
-    # ── Gold Bait ──────────────────────────────────────────────
+    # -- Gold Bait -----------------------------------------------------
     if voxel_type == VOXEL_GOLD_BAIT:
-        # Arcane sight reveals it as bait → repath
+        # Arcane sight reveals it as bait
         if arch.arcane_sight_range > 0:
             return InteractionInfo(InteractionResult.REPATH)
         # Greedy intruders grab the bait
@@ -234,35 +226,36 @@ def handle_block(
             )
         return InteractionInfo(InteractionResult.CONTINUE)
 
-    # ── Heat Beacon ───────────────────────────────────────────
+    # -- Heat Beacon ---------------------------------------------------
     if voxel_type == VOXEL_HEAT_BEACON:
-        if arch.fire_immune:
+        # Flyers avoid (not close enough to the heat source)
+        if arch.can_fly:
             return InteractionInfo(InteractionResult.CONTINUE)
         return InteractionInfo(
             InteractionResult.DAMAGE,
             damage=HEAT_BEACON_DAMAGE,
         )
 
-    # ── Pressure Plate ────────────────────────────────────────
+    # -- Pressure Plate ------------------------------------------------
     if voxel_type == VOXEL_PRESSURE_PLATE:
-        # Pressure plate activation is handled in decision.py
+        # Activation logic is handled in decision.py
         return InteractionInfo(InteractionResult.CONTINUE)
 
-    # ── Iron Bars ─────────────────────────────────────────────
+    # -- Iron Bars -----------------------------------------------------
     if voxel_type == VOXEL_IRON_BARS:
         return InteractionInfo(InteractionResult.REPATH)
 
-    # ── Floodgate ─────────────────────────────────────────────
+    # -- Floodgate -----------------------------------------------------
     if voxel_type == VOXEL_FLOODGATE:
         if block_state == 0:  # Open
             return InteractionInfo(InteractionResult.CONTINUE)
         return InteractionInfo(InteractionResult.REPATH)  # Closed
 
-    # ── Alarm Bell ────────────────────────────────────────────
+    # -- Alarm Bell ----------------------------------------------------
     if voxel_type == VOXEL_ALARM_BELL:
         return InteractionInfo(InteractionResult.CONTINUE)
 
-    # ── Fragile Floor ─────────────────────────────────────────
+    # -- Fragile Floor -------------------------------------------------
     if voxel_type == VOXEL_FRAGILE_FLOOR:
         # Flyers pass over without triggering
         if arch.can_fly:
@@ -276,36 +269,38 @@ def handle_block(
         # Everyone else walks on it (collapse handled in decision.py)
         return InteractionInfo(InteractionResult.CONTINUE)
 
-    # ── Pipe / Pump ───────────────────────────────────────────
+    # -- Pipe / Pump ---------------------------------------------------
     if voxel_type in (VOXEL_PIPE, VOXEL_PUMP):
         return InteractionInfo(InteractionResult.REPATH)
 
-    # ── Steam Vent ────────────────────────────────────────────
+    # -- Steam Vent ----------------------------------------------------
     if voxel_type == VOXEL_STEAM_VENT:
-        if arch.fire_immune or arch.can_fly:
+        # Flyers avoid the ground-level vent
+        if arch.can_fly:
             return InteractionInfo(InteractionResult.CONTINUE)
         return InteractionInfo(
             InteractionResult.DAMAGE,
             damage=STEAM_VENT_DAMAGE,
         )
 
-    # ── Reinforced wall ─────────────────────────────────────────
+    # -- Reinforced wall -----------------------------------------------
     if voxel_type == VOXEL_REINFORCED_WALL:
         return InteractionInfo(InteractionResult.REPATH)
 
-    # ── Lava ────────────────────────────────────────────────────
+    # -- Lava ----------------------------------------------------------
     if voxel_type == VOXEL_LAVA:
-        if arch.fire_immune:
+        # Flyers can pass over lava
+        if arch.can_fly:
             return InteractionInfo(InteractionResult.CONTINUE)
         return InteractionInfo(InteractionResult.DEATH)
 
-    # ── Water ───────────────────────────────────────────────────
+    # -- Water ---------------------------------------------------------
     if voxel_type == VOXEL_WATER:
-        # Pyremancer dies in water
-        if arch.fire_immune:
-            return InteractionInfo(InteractionResult.DEATH)
-        return InteractionInfo(InteractionResult.REPATH)
+        # Water entry is always permitted from the interaction layer.
+        # Deep-water damage and flow push are handled in decision.py,
+        # which checks equipment (has_water_breathing) at that point.
+        return InteractionInfo(InteractionResult.CONTINUE)
 
-    # ── Other solid blocks — impassable ─────────────────────────
+    # -- Other solid blocks -- impassable ------------------------------
     # Digger handled by pathfinder (not here, since dig is a timed action)
     return InteractionInfo(InteractionResult.REPATH)

@@ -1,4 +1,9 @@
-"""Tests for fog-of-war A* pathfinder operating on PersonalMap."""
+"""Tests for fog-of-war A* pathfinder operating on PersonalMap.
+
+Dependencies: intruders.personal_pathfinder, intruders.personal_map,
+    intruders.archetypes, config
+Dependents: (none)
+"""
 
 from __future__ import annotations
 
@@ -9,8 +14,14 @@ import pytest
 from dungeon_builder.intruders.personal_pathfinder import PersonalPathfinder
 from dungeon_builder.intruders.personal_map import PersonalMap
 from dungeon_builder.intruders.archetypes import (
-    VANGUARD, SHADOWBLADE, TUNNELER, PYREMANCER, WINDCALLER,
-    GORECLAW, GLOOMSEER,
+    EXPLORER,
+    INQUISITOR,
+    GLOOMWARDEN,
+    MOLE_TAMER,
+    EIDOLON,
+    ALCHEMIST,
+    CARTOMANCER,
+    HERO,
 )
 from dungeon_builder.config import (
     VOXEL_AIR,
@@ -51,13 +62,13 @@ class TestBasicPaths:
     def test_same_start_and_goal(self):
         pm = PersonalMap()
         pm.reveal(0, 0, 0, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 0, 0), VANGUARD)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 0, 0), INQUISITOR)
         assert path == [(0, 0, 0)]
 
     def test_straight_line(self):
         pm = PersonalMap()
         _reveal_line(pm, 0, 5)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 5, 0), VANGUARD)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 5, 0), INQUISITOR)
         assert path is not None
         assert path[0] == (0, 0, 0)
         assert path[-1] == (0, 5, 0)
@@ -68,34 +79,24 @@ class TestBasicPaths:
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 5, 0, VOXEL_AIR)
         # Gap between -- no intermediate cells revealed
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 5, 0), VANGUARD)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 5, 0), INQUISITOR)
         assert path is None
 
     def test_goal_unrevealed_returns_none(self):
         pm = PersonalMap()
         pm.reveal(0, 0, 0, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 5, 0), VANGUARD)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 5, 0), INQUISITOR)
         assert path is None
 
     def test_path_around_wall(self):
         pm = PersonalMap()
-        # Corridor: (0,0,0) -> (0,1,0) -> (1,1,0) -> (1,2,0) -> (0,2,0)
         pm.reveal(0, 0, 0, VOXEL_AIR)
-        pm.reveal(0, 1, 0, VOXEL_AIR)
+        pm.reveal(0, 1, 0, VOXEL_STONE)  # Wall!
+        pm.reveal(1, 0, 0, VOXEL_AIR)
         pm.reveal(1, 1, 0, VOXEL_AIR)
         pm.reveal(1, 2, 0, VOXEL_AIR)
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        # Stone wall at (0,1,0)... wait, that's air. Let's do it differently:
-        # Direct path (0,0)->(0,2) would go through (0,1) which is air, so there IS a direct path
-        # Let me create a proper wall scenario
-        pm2 = PersonalMap()
-        pm2.reveal(0, 0, 0, VOXEL_AIR)
-        pm2.reveal(0, 1, 0, VOXEL_STONE)  # Wall!
-        pm2.reveal(1, 0, 0, VOXEL_AIR)
-        pm2.reveal(1, 1, 0, VOXEL_AIR)
-        pm2.reveal(1, 2, 0, VOXEL_AIR)
-        pm2.reveal(0, 2, 0, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm2, (0, 0, 0), (0, 2, 0), VANGUARD)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), INQUISITOR)
         assert path is not None
         assert (0, 1, 0) not in path  # Doesn't go through wall
         assert path[-1] == (0, 2, 0)
@@ -110,7 +111,7 @@ class TestUnrevealed:
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 2, 0, VOXEL_AIR)
         # (0,1,0) not revealed -- should block path
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), VANGUARD)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), INQUISITOR)
         assert path is None
 
     def test_partial_reveal_finds_path(self):
@@ -118,7 +119,7 @@ class TestUnrevealed:
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 1, 0, VOXEL_AIR)
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), VANGUARD)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), INQUISITOR)
         assert path is not None
         assert len(path) == 3
 
@@ -132,7 +133,7 @@ class TestDoorTraversal:
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 1, 0, VOXEL_DOOR, block_state=0)  # Open
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), VANGUARD)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), INQUISITOR)
         assert path is not None
 
     def test_closed_door_blocked_for_non_interacters(self):
@@ -140,25 +141,27 @@ class TestDoorTraversal:
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 1, 0, VOXEL_DOOR, block_state=1)  # Closed
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        # Pyremancer can't bash or lockpick
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), PYREMANCER)
+        # Alchemist can't bash or lockpick
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), ALCHEMIST)
         assert path is None
 
-    def test_closed_door_lockpicked_by_shadowblade(self):
+    def test_closed_door_lockpicked_by_explorer(self):
         pm = PersonalMap()
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 1, 0, VOXEL_DOOR, block_state=1)
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), SHADOWBLADE)
+        # Explorer has can_lockpick=True
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), EXPLORER)
         assert path is not None
         assert (0, 1, 0) in path
 
-    def test_closed_door_bashed_by_vanguard(self):
+    def test_closed_door_bashed_by_inquisitor(self):
         pm = PersonalMap()
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 1, 0, VOXEL_DOOR, block_state=1)
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), VANGUARD)
+        # Inquisitor has can_bash_door=True
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), INQUISITOR)
         assert path is not None
 
 
@@ -166,54 +169,39 @@ class TestDoorTraversal:
 
 
 class TestDiggerTraversal:
-    def test_tunneler_through_stone(self):
+    def test_mole_tamer_familiars_cannot_dig_through_stone(self):
+        """Mole Tamer has can_dig=False (familiars dig, not the tamer itself)."""
         pm = PersonalMap()
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 1, 0, VOXEL_STONE)
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), TUNNELER)
-        assert path is not None
-        assert (0, 1, 0) in path  # Goes through stone
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), MOLE_TAMER)
+        assert path is None
 
     def test_non_digger_blocked_by_stone(self):
         pm = PersonalMap()
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 1, 0, VOXEL_STONE)
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), VANGUARD)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), INQUISITOR)
         assert path is None
 
-    def test_tunneler_cannot_dig_reinforced(self):
+    def test_no_one_digs_reinforced(self):
         pm = PersonalMap()
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 1, 0, VOXEL_REINFORCED_WALL)
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), TUNNELER)
-        assert path is None
+        for arch in [INQUISITOR, MOLE_TAMER, HERO]:
+            path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), arch)
+            assert path is None, f"{arch.name} should not pass through reinforced wall"
 
-    def test_tunneler_cannot_dig_bedrock(self):
+    def test_no_one_digs_bedrock(self):
         pm = PersonalMap()
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 1, 0, VOXEL_BEDROCK)
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), TUNNELER)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), INQUISITOR)
         assert path is None
-
-    def test_dig_has_high_cost(self):
-        """Tunneler prefers air over digging even if air path is longer."""
-        pm = PersonalMap()
-        # Direct path through stone: 3 cells
-        pm.reveal(0, 0, 0, VOXEL_AIR)
-        pm.reveal(0, 1, 0, VOXEL_STONE)
-        pm.reveal(0, 2, 0, VOXEL_AIR)
-        # Air detour: 5 cells
-        pm.reveal(1, 0, 0, VOXEL_AIR)
-        pm.reveal(1, 1, 0, VOXEL_AIR)
-        pm.reveal(1, 2, 0, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), TUNNELER)
-        assert path is not None
-        # Should prefer the air detour since dig cost is high
-        assert (0, 1, 0) not in path
 
 
 # ── Flyer traversal ─────────────────────────────────────────────────
@@ -225,7 +213,8 @@ class TestFlyerTraversal:
         pm.reveal(5, 5, 0, VOXEL_AIR)
         pm.reveal(5, 5, 1, VOXEL_AIR)
         pm.reveal(5, 5, 2, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm, (5, 5, 0), (5, 5, 2), WINDCALLER)
+        # Eidolon has can_fly=True
+        path = PersonalPathfinder.find_path(pm, (5, 5, 0), (5, 5, 2), EIDOLON)
         assert path is not None
         assert len(path) == 3
 
@@ -233,22 +222,22 @@ class TestFlyerTraversal:
         pm = PersonalMap()
         pm.reveal(5, 5, 0, VOXEL_AIR)
         pm.reveal(5, 5, 1, VOXEL_AIR)
-        # Vanguard can't fly up
-        path = PersonalPathfinder.find_path(pm, (5, 5, 1), (5, 5, 0), VANGUARD)
+        # Inquisitor can't fly up
+        path = PersonalPathfinder.find_path(pm, (5, 5, 1), (5, 5, 0), INQUISITOR)
         assert path is None
 
     def test_non_flyer_uses_slope_to_go_up(self):
         pm = PersonalMap()
         pm.reveal(5, 5, 1, VOXEL_AIR)
         pm.reveal(5, 5, 0, VOXEL_SLOPE)  # Slope at z=0
-        path = PersonalPathfinder.find_path(pm, (5, 5, 1), (5, 5, 0), VANGUARD)
+        path = PersonalPathfinder.find_path(pm, (5, 5, 1), (5, 5, 0), INQUISITOR)
         assert path is not None
 
     def test_non_flyer_uses_stairs_to_go_up(self):
         pm = PersonalMap()
         pm.reveal(5, 5, 1, VOXEL_AIR)
         pm.reveal(5, 5, 0, VOXEL_STAIRS)
-        path = PersonalPathfinder.find_path(pm, (5, 5, 1), (5, 5, 0), VANGUARD)
+        path = PersonalPathfinder.find_path(pm, (5, 5, 1), (5, 5, 0), INQUISITOR)
         assert path is not None
 
     def test_non_flyer_can_fall_down(self):
@@ -256,20 +245,24 @@ class TestFlyerTraversal:
         pm.reveal(5, 5, 0, VOXEL_AIR)
         pm.reveal(5, 5, 1, VOXEL_AIR)
         # Going deeper (z+1) is falling -- should be allowed
-        path = PersonalPathfinder.find_path(pm, (5, 5, 0), (5, 5, 1), VANGUARD)
+        path = PersonalPathfinder.find_path(pm, (5, 5, 0), (5, 5, 1), INQUISITOR)
         assert path is not None
 
 
-# ── Fire-immune traversal ───────────────────────────────────────────
+# ── Fire-immune traversal (equipment-driven) ──────────────────────
 
 
 class TestFireImmuneTraversal:
-    def test_pyremancer_through_lava(self):
+    def test_fire_immune_through_lava(self):
         pm = PersonalMap()
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 1, 0, VOXEL_LAVA)
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), PYREMANCER)
+        # Use has_fire_immunity parameter (equipment-driven)
+        path = PersonalPathfinder.find_path(
+            pm, (0, 0, 0), (0, 2, 0), ALCHEMIST,
+            has_fire_immunity=True,
+        )
         assert path is not None
 
     def test_non_immune_blocked_by_lava(self):
@@ -277,7 +270,10 @@ class TestFireImmuneTraversal:
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 1, 0, VOXEL_LAVA)
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), VANGUARD)
+        path = PersonalPathfinder.find_path(
+            pm, (0, 0, 0), (0, 2, 0), INQUISITOR,
+            has_fire_immunity=False,
+        )
         assert path is None
 
 
@@ -290,7 +286,7 @@ class TestImpassables:
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 1, 0, VOXEL_WATER)
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        for arch in [VANGUARD, SHADOWBLADE, TUNNELER, PYREMANCER, WINDCALLER]:
+        for arch in [INQUISITOR, EXPLORER, MOLE_TAMER, ALCHEMIST, EIDOLON]:
             path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), arch)
             assert path is None, f"{arch.name} should not pass through water"
 
@@ -299,7 +295,7 @@ class TestImpassables:
         pm.reveal(0, 0, 0, VOXEL_AIR)
         pm.reveal(0, 1, 0, VOXEL_REINFORCED_WALL)
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        for arch in [VANGUARD, TUNNELER, GORECLAW]:
+        for arch in [INQUISITOR, MOLE_TAMER, HERO]:
             path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), arch)
             assert path is None, f"{arch.name} should not pass through reinforced wall"
 
@@ -320,8 +316,8 @@ class TestHazardAvoidance:
         pm.reveal(1, 0, 0, VOXEL_AIR)
         pm.reveal(1, 1, 0, VOXEL_AIR)
         pm.reveal(1, 2, 0, VOXEL_AIR)
-        # Gloomseer has cunning=0.7 (>=0.5)
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), GLOOMSEER)
+        # Gloomwarden has cunning=0.6 (>=0.5)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), GLOOMWARDEN)
         assert path is not None
         # Should avoid the hazard cell
         assert (0, 1, 0) not in path
@@ -333,10 +329,59 @@ class TestHazardAvoidance:
         pm.reveal(0, 1, 0, VOXEL_AIR)
         pm.hazards.add((0, 1, 0))
         pm.reveal(0, 2, 0, VOXEL_AIR)
-        # Goreclaw has cunning=0.0
-        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), GORECLAW)
+        # Hero has cunning=0.1 (< 0.5)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), HERO)
         assert path is not None
         assert (0, 1, 0) in path  # Direct path through hazard
+
+
+# ── Phase-walk ──────────────────────────────────────────────────────
+
+
+class TestPhaseWalk:
+    """Test phase-walk: pathfinder should find path through thin walls
+    when archetype.phase_thickness > 0."""
+
+    def test_eidolon_phases_through_thin_wall(self):
+        """Eidolon (phase_thickness=2) can phase through a revealed solid wall
+        if there is revealed air on the other side."""
+        pm = PersonalMap()
+        pm.reveal(0, 0, 0, VOXEL_AIR)
+        pm.reveal(0, 1, 0, VOXEL_STONE)  # Thin wall (thickness 1)
+        pm.reveal(0, 2, 0, VOXEL_AIR)
+        # Eidolon has phase_thickness=2 and can_fly=True
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), EIDOLON)
+        assert path is not None
+        assert path[-1] == (0, 2, 0)
+
+    def test_non_phaser_cannot_pass_thin_wall(self):
+        """Non-phase archetype cannot pass through a thin wall."""
+        pm = PersonalMap()
+        pm.reveal(0, 0, 0, VOXEL_AIR)
+        pm.reveal(0, 1, 0, VOXEL_STONE)
+        pm.reveal(0, 2, 0, VOXEL_AIR)
+        # Inquisitor has phase_thickness=0
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), INQUISITOR)
+        assert path is None
+
+    def test_phase_prefers_air_over_phasing(self):
+        """When an air detour exists, phase-walk should prefer it due to higher cost."""
+        pm = PersonalMap()
+        # Direct path through stone wall
+        pm.reveal(0, 0, 0, VOXEL_AIR)
+        pm.reveal(0, 1, 0, VOXEL_STONE)  # Wall
+        pm.reveal(0, 2, 0, VOXEL_AIR)
+        # Air detour
+        pm.reveal(1, 0, 0, VOXEL_AIR)
+        pm.reveal(1, 1, 0, VOXEL_AIR)
+        pm.reveal(1, 2, 0, VOXEL_AIR)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), EIDOLON)
+        assert path is not None
+        # Phase-walk cost is 5.0 per cell, air is 1.0.
+        # The air detour is 5 steps (0,0)->(1,0)->(1,1)->(1,2)->(0,2) = cost 4.0
+        # Phase direct is (0,0)->(0,1)->(0,2) = cost 5.0+1.0 = 6.0
+        # Eidolon should prefer the air detour
+        assert (0, 1, 0) not in path
 
 
 # ── Max iterations ──────────────────────────────────────────────────
@@ -348,14 +393,14 @@ class TestMaxIterations:
         for y in range(50):
             pm.reveal(0, y, 0, VOXEL_AIR)
         path = PersonalPathfinder.find_path(
-            pm, (0, 0, 0), (0, 49, 0), VANGUARD, max_iterations=5
+            pm, (0, 0, 0), (0, 49, 0), INQUISITOR, max_iterations=5
         )
         assert path is None  # Not enough iterations to find long path
 
 
-# ══════════════════════════════════════════════════════════════════════
+# ======================================================================
 # Tests from test_new_block_pathfinding.py
-# ══════════════════════════════════════════════════════════════════════
+# ======================================================================
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -384,7 +429,7 @@ class TestIronBarsImpassable:
     def test_iron_bars_blocks_path(self):
         pmap = PersonalMap()
         start, goal = _make_corridor(pmap, block_type=VOXEL_IRON_BARS)
-        path = PersonalPathfinder.find_path(pmap, start, goal, VANGUARD)
+        path = PersonalPathfinder.find_path(pmap, start, goal, INQUISITOR)
         assert path is None
 
 
@@ -398,7 +443,7 @@ class TestFloodgatePathfinding:
         pmap = PersonalMap()
         start, goal = _make_corridor(pmap, block_type=VOXEL_FLOODGATE,
                                      block_state=1)
-        path = PersonalPathfinder.find_path(pmap, start, goal, VANGUARD)
+        path = PersonalPathfinder.find_path(pmap, start, goal, INQUISITOR)
         assert path is None
 
     def test_open_floodgate_allows_path(self):
@@ -406,7 +451,7 @@ class TestFloodgatePathfinding:
         pmap = PersonalMap()
         start, goal = _make_corridor(pmap, block_type=VOXEL_FLOODGATE,
                                      block_state=0)
-        path = PersonalPathfinder.find_path(pmap, start, goal, VANGUARD)
+        path = PersonalPathfinder.find_path(pmap, start, goal, INQUISITOR)
         assert path is not None
         assert start in path
         assert goal in path
@@ -422,7 +467,7 @@ class TestPressurePlatePathfinding:
         """Non-cunning archetype walks right through."""
         pmap = PersonalMap()
         start, goal = _make_corridor(pmap, block_type=VOXEL_PRESSURE_PLATE)
-        path = PersonalPathfinder.find_path(pmap, start, goal, VANGUARD)
+        path = PersonalPathfinder.find_path(pmap, start, goal, INQUISITOR)
         assert path is not None
         assert (2, 0, 0) in path
 
@@ -434,7 +479,7 @@ class TestPressurePlatePathfinding:
         is in the path and, when an alternative air-only route exists, the
         cunning archetype prefers it.
         """
-        cunning_arch = replace(VANGUARD, cunning=0.8)
+        cunning_arch = replace(INQUISITOR, cunning=0.8)
         # Single corridor -- no alternative, must pass through
         pmap = PersonalMap()
         start, goal = _make_corridor(pmap, block_type=VOXEL_PRESSURE_PLATE)
@@ -471,7 +516,7 @@ class TestPipeImpassable:
     def test_pipe_blocks_path(self):
         pmap = PersonalMap()
         start, goal = _make_corridor(pmap, block_type=VOXEL_PIPE)
-        path = PersonalPathfinder.find_path(pmap, start, goal, VANGUARD)
+        path = PersonalPathfinder.find_path(pmap, start, goal, INQUISITOR)
         assert path is None
 
 
@@ -483,7 +528,7 @@ class TestPumpImpassable:
     def test_pump_blocks_path(self):
         pmap = PersonalMap()
         start, goal = _make_corridor(pmap, block_type=VOXEL_PUMP)
-        path = PersonalPathfinder.find_path(pmap, start, goal, VANGUARD)
+        path = PersonalPathfinder.find_path(pmap, start, goal, INQUISITOR)
         assert path is None
 
 
@@ -495,7 +540,7 @@ class TestGoldBaitTraversable:
     def test_gold_bait_allows_path(self):
         pmap = PersonalMap()
         start, goal = _make_corridor(pmap, block_type=VOXEL_GOLD_BAIT)
-        path = PersonalPathfinder.find_path(pmap, start, goal, VANGUARD)
+        path = PersonalPathfinder.find_path(pmap, start, goal, INQUISITOR)
         assert path is not None
         assert (2, 0, 0) in path
 
@@ -508,7 +553,7 @@ class TestHeatBeaconTraversable:
     def test_heat_beacon_allows_path(self):
         pmap = PersonalMap()
         start, goal = _make_corridor(pmap, block_type=VOXEL_HEAT_BEACON)
-        path = PersonalPathfinder.find_path(pmap, start, goal, VANGUARD)
+        path = PersonalPathfinder.find_path(pmap, start, goal, INQUISITOR)
         assert path is not None
         assert (2, 0, 0) in path
 
@@ -521,7 +566,7 @@ class TestAlarmBellTraversable:
     def test_alarm_bell_allows_path(self):
         pmap = PersonalMap()
         start, goal = _make_corridor(pmap, block_type=VOXEL_ALARM_BELL)
-        path = PersonalPathfinder.find_path(pmap, start, goal, VANGUARD)
+        path = PersonalPathfinder.find_path(pmap, start, goal, INQUISITOR)
         assert path is not None
         assert (2, 0, 0) in path
 
@@ -534,7 +579,7 @@ class TestFragileFloorTraversable:
     def test_fragile_floor_allows_path(self):
         pmap = PersonalMap()
         start, goal = _make_corridor(pmap, block_type=VOXEL_FRAGILE_FLOOR)
-        path = PersonalPathfinder.find_path(pmap, start, goal, VANGUARD)
+        path = PersonalPathfinder.find_path(pmap, start, goal, INQUISITOR)
         assert path is not None
         assert (2, 0, 0) in path
 
@@ -547,6 +592,6 @@ class TestSteamVentTraversable:
     def test_steam_vent_allows_path(self):
         pmap = PersonalMap()
         start, goal = _make_corridor(pmap, block_type=VOXEL_STEAM_VENT)
-        path = PersonalPathfinder.find_path(pmap, start, goal, VANGUARD)
+        path = PersonalPathfinder.find_path(pmap, start, goal, INQUISITOR)
         assert path is not None
         assert (2, 0, 0) in path

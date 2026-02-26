@@ -1,4 +1,10 @@
-"""Free-camera controls: orbit, pan, zoom, Z-level scrolling, and mouse picking."""
+"""Free-camera controls: orbit, pan, zoom, Z-level scrolling, and mouse picking.
+
+Dependencies: config, core.event_bus, core.game_state,
+    core.keybinding_registry, rendering.layer_slice
+Dependents: main (wiring), tests/rendering/test_camera.py,
+    tests/building/test_drag_select.py
+"""
 
 from __future__ import annotations
 
@@ -14,8 +20,6 @@ from direct.showbase.ShowBase import ShowBase
 
 import dungeon_builder.config as _cfg
 from dungeon_builder.config import (
-    GRID_WIDTH,
-    GRID_DEPTH,
     GRID_HEIGHT,
     VOXEL_AIR,
     CORE_X,

@@ -23,12 +23,12 @@ from dungeon_builder.dungeon_core.core import DungeonCore
 from dungeon_builder.intruders.agent import Intruder, IntruderState
 from dungeon_builder.intruders.archetypes import (
     IntruderObjective,
-    VANGUARD,
-    SHADOWBLADE,
-    TUNNELER,
-    WINDCALLER,
-    GLOOMSEER,
-    GORECLAW,
+    INQUISITOR,
+    EXPLORER,
+    MOLE_TAMER,
+    GLOOMWARDEN,
+    ALCHEMIST,
+    HERO,
 )
 from dungeon_builder.intruders.personal_map import PersonalMap
 from dungeon_builder.intruders.personal_pathfinder import PersonalPathfinder
@@ -85,7 +85,7 @@ def _make_full_grid(width=GRID_WIDTH, depth=GRID_DEPTH, height=GRID_HEIGHT):
     return grid
 
 
-def _make_intruder(iid=1, x=0, y=0, z=0, archetype=VANGUARD):
+def _make_intruder(iid=1, x=0, y=0, z=0, archetype=INQUISITOR):
     return Intruder(
         intruder_id=iid, x=x, y=y, z=z,
         archetype=archetype,
@@ -413,7 +413,7 @@ class TestBenchmarkPathfinding:
         goal = (63, 63, 0)
 
         # Verify path exists
-        test_path = PersonalPathfinder.find_path(pmap, start, goal, VANGUARD)
+        test_path = PersonalPathfinder.find_path(pmap, start, goal, INQUISITOR)
         assert test_path is not None, "Setup error: no valid path"
         assert len(test_path) > 50, f"Path too short ({len(test_path)} steps)"
 
@@ -421,7 +421,7 @@ class TestBenchmarkPathfinding:
 
         # Cold: full A* recompute each time
         def cold():
-            PersonalPathfinder.find_path(pmap, start, goal, VANGUARD)
+            PersonalPathfinder.find_path(pmap, start, goal, INQUISITOR)
 
         cold_time = _time_it(cold, iters) * 1000
 
@@ -456,7 +456,7 @@ class TestBenchmarkPathfinding:
 
         def run_astar():
             PersonalPathfinder.find_path(
-                pmap, (0, 32, 5), (50, 32, 5), VANGUARD,
+                pmap, (0, 32, 5), (50, 32, 5), INQUISITOR,
             )
 
         astar_time = _time_it(run_astar, iters) * 1000
@@ -482,8 +482,8 @@ class TestBenchmarkCombinedTick:
         ai = IntruderAI(bus, grid, pf, core, rng)
 
         # Create 8 intruders at various positions in air
-        archetypes = [VANGUARD, SHADOWBLADE, TUNNELER, WINDCALLER,
-                      GLOOMSEER, GORECLAW, VANGUARD, SHADOWBLADE]
+        archetypes = [INQUISITOR, EXPLORER, MOLE_TAMER, GLOOMWARDEN,
+                      ALCHEMIST, HERO, INQUISITOR, EXPLORER]
         for i, arch in enumerate(archetypes):
             intruder = _make_intruder(i + 1, x=i * 7 + 2, y=0, z=0, archetype=arch)
             intruder.state = IntruderState.ADVANCING

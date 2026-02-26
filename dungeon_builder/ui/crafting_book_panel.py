@@ -13,6 +13,10 @@ Features:
   ``ingredient_highlight`` (cyan tint for 3 s) or an error message.
 
 Opened with the B key or the "Book [B]" button on the HUD.
+
+Dependencies: core.event_bus, core.game_state, core.keybinding_registry,
+    building.crafting_journal, building.move_system, ui.voxel_names, ui.style
+Dependents: main (wiring), tests/ui/test_crafting_book_panel.py
 """
 
 from __future__ import annotations
@@ -37,22 +41,10 @@ if TYPE_CHECKING:
     from dungeon_builder.building.crafting_journal import CraftingJournal
     from dungeon_builder.building.move_system import MoveSystem
 
-logger = logging.getLogger("dungeon_builder.ui")
+from dungeon_builder.ui.voxel_names import VTYPE_NAMES as _VTYPE_NAMES
+from dungeon_builder.ui import style as _sty
 
-# Map voxel type int -> friendly name (duplicated from hud.py to avoid
-# coupling; could be moved to a shared module if desired).
-_VTYPE_NAMES = {
-    1: "Dirt", 2: "Stone", 3: "Bedrock", 4: "Core",
-    10: "Sandstone", 11: "Limestone", 12: "Shale", 13: "Chalk",
-    20: "Slate", 21: "Marble", 22: "Gneiss",
-    30: "Granite", 31: "Basalt", 32: "Obsidian",
-    40: "Iron Ore", 41: "Copper Ore", 42: "Gold Ore", 43: "Mana Crystal",
-    50: "Lava", 51: "Water",
-    60: "Iron Ingot", 61: "Copper Ingot", 62: "Gold Ingot",
-    63: "Enchanted Metal",
-    70: "Reinforced Wall", 71: "Spike", 72: "Door", 73: "Treasure",
-    74: "Rolling Stone", 75: "Tarp", 76: "Slope", 77: "Stairs",
-}
+logger = logging.getLogger("dungeon_builder.ui")
 
 
 def _input_names(required_inputs: frozenset[int]) -> str:
@@ -121,21 +113,21 @@ class CraftingBookPanel:
 
         # Right-side panel background
         self.panel = DirectFrame(
-            frameColor=(0.05, 0.05, 0.1, 0.92),
+            frameColor=_sty.BG_COLOR,
             frameSize=(0.55, 1.35, -0.92, 0.92),
             pos=(0, 0, 0),
             parent=a2d,
-            sortOrder=50,
+            sortOrder=_sty.PANEL_SORT_ORDER,
         )
 
         # Title
         self.title_label = DirectLabel(
             text="Crafting [B]",
-            text_fg=(0.9, 0.8, 0.4, 1),
+            text_fg=_sty.TITLE_COLOR,
             text_scale=0.05,
             text_align=TextNode.A_left,
             pos=(0.6, 0, 0.84),
-            frameColor=(0, 0, 0, 0),
+            frameColor=_sty.TRANSPARENT,
             parent=self.panel,
         )
 
@@ -143,9 +135,9 @@ class CraftingBookPanel:
         self.close_btn = DirectButton(
             text="X",
             text_scale=0.045,
-            text_fg=(0.9, 0.3, 0.3, 1),
+            text_fg=_sty.ERROR_COLOR,
             frameSize=(-0.035, 0.035, -0.025, 0.04),
-            frameColor=(0.15, 0.15, 0.2, 0.8),
+            frameColor=_sty.BUTTON_BG_DIM,
             pos=(1.28, 0, 0.86),
             command=self.toggle,
             parent=self.panel,
@@ -154,11 +146,11 @@ class CraftingBookPanel:
         # Discovered count
         self.count_label = DirectLabel(
             text="",
-            text_fg=(0.6, 0.6, 0.6, 1),
+            text_fg=_sty.MUTED_COLOR,
             text_scale=0.035,
             text_align=TextNode.A_left,
             pos=(0.6, 0, 0.77),
-            frameColor=(0, 0, 0, 0),
+            frameColor=_sty.TRANSPARENT,
             parent=self.panel,
         )
 
@@ -228,10 +220,10 @@ class CraftingBookPanel:
             btn = DirectButton(
                 text=recipe_name,
                 text_scale=0.038,
-                text_fg=(0.5, 0.5, 0.5, 1),
+                text_fg=_sty.MUTED_COLOR,
                 text_align=TextNode.A_left,
                 frameSize=(0.0, 0.65, -0.025, 0.045),
-                frameColor=(0.12, 0.12, 0.18, 0.7),
+                frameColor=_sty.RECIPE_BG,
                 pos=(0.02, 0, y),
                 parent=canvas,
                 command=self._on_recipe_click,
@@ -243,7 +235,7 @@ class CraftingBookPanel:
             pin_btn = DirectButton(
                 text="o",
                 text_scale=0.038,
-                text_fg=(0.45, 0.45, 0.45, 1),
+                text_fg=_sty.DISABLED_COLOR,
                 text_align=TextNode.A_center,
                 frameSize=(-0.025, 0.025, -0.02, 0.035),
                 frameColor=(0.15, 0.15, 0.2, 0.6),
@@ -257,11 +249,11 @@ class CraftingBookPanel:
             # Clickable description label for ingredient highlighting
             desc_btn = DirectButton(
                 text=entry["description"],
-                text_fg=(0.4, 0.4, 0.4, 1),
+                text_fg=_sty.DIM_COLOR,
                 text_scale=0.028,
                 text_align=TextNode.A_left,
                 frameSize=(0.0, 0.72, -0.018, 0.022),
-                frameColor=(0, 0, 0, 0),
+                frameColor=_sty.TRANSPARENT,
                 pos=(0.04, 0, y - 0.04),
                 parent=canvas,
                 command=self._on_ingredient_click,
@@ -364,7 +356,6 @@ class CraftingBookPanel:
             # Get the recipe object for required_inputs display
             recipe_obj = None
             if entry["discovered"]:
-                from dungeon_builder.building.crafting_book import CraftingBook
                 # Access via journal's reference
                 recipe_obj = self.journal._crafting_book.recipes[i]
 
@@ -401,19 +392,19 @@ class CraftingBookPanel:
                 if self._selected_recipe == actual_name:
                     # Active craft mode — golden highlight
                     btn["text_fg"] = (1.0, 0.9, 0.3, 1)
-                    btn["frameColor"] = (0.25, 0.22, 0.08, 0.9)
+                    btn["frameColor"] = _sty.RECIPE_BG_ACTIVE
                     btn["state"] = DGG.NORMAL
                 elif has_input:
                     # Enabled — has material
-                    btn["text_fg"] = (0.3, 1.0, 0.3, 1)
-                    btn["frameColor"] = (0.12, 0.18, 0.12, 0.8)
+                    btn["text_fg"] = _sty.ENABLED_COLOR
+                    btn["frameColor"] = _sty.RECIPE_BG_ENABLED
                     desc_btn["text_fg"] = (0.7, 0.9, 0.7, 1)
                     btn["state"] = DGG.NORMAL
                 else:
                     # Disabled — no material (but still clickable for craft)
-                    btn["text_fg"] = (0.5, 0.5, 0.5, 1)
-                    btn["frameColor"] = (0.12, 0.12, 0.18, 0.7)
-                    desc_btn["text_fg"] = (0.4, 0.4, 0.4, 1)
+                    btn["text_fg"] = _sty.MUTED_COLOR
+                    btn["frameColor"] = _sty.RECIPE_BG
+                    desc_btn["text_fg"] = _sty.DIM_COLOR
                     btn["state"] = DGG.NORMAL
             else:
                 btn["text"] = "???"

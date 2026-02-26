@@ -1,11 +1,18 @@
 """Dungeon reputation system — tracks cumulative outcomes to influence future raids.
 
 The dungeon develops a reputation based on how the player handles intruders:
-- **Deadly**: many kills, few escapes → future intruders focus on destruction
-- **Rich**: treasure is being lost → future intruders are greedier
-- **Unknown**: too few data points → scout-heavy parties
+- **Deadly**: many kills, few escapes -> future intruders focus on destruction
+- **Rich**: treasure is being lost -> future intruders are greedier
+- **Unknown**: too few data points -> scout-heavy parties
 
-Reputation affects party composition, objective voting, loyalty, and intruder levels.
+Reputation affects party composition (6 templates: Scouting Band, War Party,
+Siege Company, Arcane Expedition, Hero's Retinue, Eidolon Pair), objective
+voting, loyalty, and intruder levels.  Also tracks the dominant threat type
+for equipment-generation feedback loops (Alchemist counter-potions, etc.).
+
+Dependencies: config, core.event_bus
+Dependents: intruders.decision, intruders.equipment,
+    tests/intruders/test_reputation.py, tests/intruders/test_social_dynamics.py
 """
 
 from __future__ import annotations
@@ -143,14 +150,15 @@ class DungeonReputation:
         profile = self.get_profile()
         if profile.lethality > REPUTATION_DEADLY_LETHALITY and profile.richness < REPUTATION_RICH_RICHNESS:
             return {
-                "Siege Force": 0.15,
-                "War Band": 0.10,
-                "Scouting Party": -0.10,
+                "Siege Company": 0.15,
+                "War Party": 0.10,
+                "Scouting Band": -0.10,
             }
         if profile.richness > REPUTATION_RICH_RICHNESS:
             return {
-                "Scouting Party": 0.15,
-                "Standard Raid": -0.10,
+                "Scouting Band": 0.15,
+                "Arcane Expedition": 0.05,
+                "War Party": -0.10,
             }
         return {}
 
@@ -177,3 +185,15 @@ class DungeonReputation:
         if profile.lethality > 0.5:
             return (profile.lethality - 0.5) * LEVEL_DEADLY_SHIFT / 0.1
         return 0.0
+
+    def get_dominant_threat(self) -> str:
+        """Return the dominant death cause in the dungeon.
+
+        Returns one of ``"water"``, ``"fire"``, ``"trap"``, or ``"unknown"``.
+        Used by Alchemist loadout generation to brew appropriate
+        counter-potions.
+
+        Currently a stub — detailed death-cause tracking is not yet
+        implemented.  Always returns ``"unknown"``.
+        """
+        return "unknown"

@@ -1,4 +1,13 @@
-"""Visual effects for the dungeon core, hover highlight, craft markers, dig indicators, and ore glows."""
+"""Visual effects: core marker, hover highlight, craft/dig/ore-glow markers.
+
+Markers for world-positioned effects (core, crafting, pending digs, ore
+glows) are attached to the layer system so they inherit z-level alpha
+transparency.  Interaction feedback (hover highlight, drag box) bypasses
+layers and renders on top of everything.
+
+Dependencies: config, rendering.layer_slice
+Dependents: main (wiring), tests/rendering/test_effects.py
+"""
 
 from __future__ import annotations
 
@@ -29,6 +38,7 @@ from dungeon_builder.config import (
 
 if TYPE_CHECKING:
     from dungeon_builder.core.event_bus import EventBus
+    from dungeon_builder.rendering.layer_slice import LayerSliceManager
     from dungeon_builder.world.voxel_grid import VoxelGrid
 
 logger = logging.getLogger("dungeon_builder.rendering.effects")
@@ -182,10 +192,12 @@ class EffectsRenderer:
         app: ShowBase,
         event_bus: EventBus,
         voxel_grid: VoxelGrid | None = None,
+        layer_manager: LayerSliceManager | None = None,
     ) -> None:
         self.app = app
         self.event_bus = event_bus
         self._voxel_grid = voxel_grid
+        self._layer_manager = layer_manager
         self._core_np: NodePath | None = None
         self._highlight_np: NodePath | None = None
         self._craft_marker_nps: list[NodePath] = []  # Pool of reusable markers
@@ -217,6 +229,12 @@ class EffectsRenderer:
         event_bus.subscribe("drag_select_cleared", self._on_drag_cleared)
         event_bus.subscribe("dig_batch_pending", self._on_dig_batch_pending)
         event_bus.subscribe("dig_batch_cancelled", self._on_dig_batch_cancelled)
+
+    def _get_layer_parent(self, z: int) -> NodePath:
+        """Return the layer NodePath for world-positioned markers."""
+        if self._layer_manager is not None:
+            return self._layer_manager.get_layer(z)
+        return self.app.render
 
     def _init_highlight(self) -> None:
         """Create the wireframe highlight cube, hidden by default."""
@@ -281,7 +299,8 @@ class EffectsRenderer:
     def place_core_marker(self, x: int, y: int, z: int) -> None:
         """Place a visual marker at the dungeon core position."""
         node = _make_core_marker()
-        np = self.app.render.attach_new_node(node)
+        parent = self._get_layer_parent(z)
+        np = parent.attach_new_node(node)
         np.set_pos(x, y, -z)
         self._core_np = np
 
@@ -298,7 +317,8 @@ class EffectsRenderer:
             if i >= len(self._craft_marker_nps):
                 # Create a new marker node and add to pool
                 node = _make_craft_marker()
-                np = self.app.render.attach_new_node(node)
+                parent = self._get_layer_parent(z)
+                np = parent.attach_new_node(node)
                 np.set_transparency(TransparencyAttrib.M_alpha)
                 np.set_light_off()
                 np.set_bin("fixed", 45)
@@ -306,6 +326,10 @@ class EffectsRenderer:
                 np.set_depth_test(False)
                 self._craft_marker_nps.append(np)
             marker = self._craft_marker_nps[i]
+            # Reparent to correct layer for this position
+            parent = self._get_layer_parent(z)
+            if marker.get_parent() != parent:
+                marker.reparent_to(parent)
             marker.set_pos(x, y, -z)
             marker.show()
 
@@ -355,7 +379,8 @@ class EffectsRenderer:
         for i, (x, y, z) in enumerate(self._pending_dig_positions):
             if i >= len(self._pending_dig_nps):
                 node = _make_pending_dig_marker()
-                np = self.app.render.attach_new_node(node)
+                parent = self._get_layer_parent(z)
+                np = parent.attach_new_node(node)
                 np.set_transparency(TransparencyAttrib.M_alpha)
                 np.set_light_off()
                 np.set_bin("fixed", 44)
@@ -363,6 +388,9 @@ class EffectsRenderer:
                 np.set_depth_test(False)
                 self._pending_dig_nps.append(np)
             marker = self._pending_dig_nps[i]
+            parent = self._get_layer_parent(z)
+            if marker.get_parent() != parent:
+                marker.reparent_to(parent)
             marker.set_pos(x, y, -z)
             marker.show()
 
@@ -465,7 +493,8 @@ class EffectsRenderer:
             if i >= len(self._ore_glow_nps):
                 # Create white-base marker; tint via set_color_scale
                 node = _make_glow_marker(1.0, 1.0, 1.0, 1.0, name="ore_glow")
-                np_node = self.app.render.attach_new_node(node)
+                parent = self._get_layer_parent(z)
+                np_node = parent.attach_new_node(node)
                 np_node.set_transparency(TransparencyAttrib.M_alpha)
                 np_node.set_light_off()
                 np_node.set_bin("fixed", 40)
@@ -474,6 +503,9 @@ class EffectsRenderer:
                 self._ore_glow_nps.append(np_node)
 
             marker = self._ore_glow_nps[i]
+            parent = self._get_layer_parent(z)
+            if marker.get_parent() != parent:
+                marker.reparent_to(parent)
             # Per-ore-type color via color_scale
             if self._voxel_grid is not None:
                 vtype = int(self._voxel_grid.grid[x, y, z])

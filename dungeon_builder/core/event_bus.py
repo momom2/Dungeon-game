@@ -1,4 +1,8 @@
-"""Pub/sub event system for decoupled communication between game systems."""
+"""Pub/sub event system for decoupled communication between game systems.
+
+Dependencies: (none — standalone)
+Dependents: nearly all subsystems, main (wiring), tests across all domains
+"""
 
 from __future__ import annotations
 

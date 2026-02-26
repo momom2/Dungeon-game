@@ -1,4 +1,9 @@
-"""Seeded random number generator for reproducible game runs."""
+"""Seeded random number generator for reproducible game runs.
+
+Dependencies: (none — standalone)
+Dependents: intruders.decision, intruders.party, main (wiring),
+    world.geology, tests/utils/test_rng.py, tests/intruders/
+"""
 
 from __future__ import annotations
 

@@ -3,6 +3,9 @@
 Vision is based on **straight-line Bresenham ray-casting**, not Manhattan
 distance.  Rays are blocked by solid opaque blocks (stone, dirt, etc.)
 but pass through air, open doors, slopes, and stairs.
+
+Dependencies: config, world.voxel_grid
+Dependents: intruders.decision, tests/intruders/test_vision.py
 """
 
 from __future__ import annotations
@@ -15,7 +18,6 @@ from dungeon_builder.config import (
     VOXEL_SLOPE,
     VOXEL_STAIRS,
     VOXEL_WATER,
-    VOXEL_LAVA,
     VOXEL_IRON_BARS,
     VOXEL_FLOODGATE,
     WATER_LOS_DEPTH,
@@ -101,35 +103,6 @@ def bresenham_3d(
             z += sz
 
     return cells
-
-
-def _is_los_transparent(
-    voxel_grid: VoxelGrid,
-    x: int, y: int, z: int,
-) -> bool:
-    """Return True if LOS passes through this cell.
-
-    * Air, slopes, stairs are always transparent.
-    * Open doors (block_state == 0) are transparent; closed doors block.
-    * Water is semi-transparent (counted separately for depth check).
-    """
-    if not voxel_grid.in_bounds(x, y, z):
-        return False
-
-    vtype = voxel_grid.get(x, y, z)
-    if vtype in _TRANSPARENT:
-        return True
-    # Open doors and open floodgates are transparent
-    if vtype in _STATE_TRANSPARENT and voxel_grid.block_state[x, y, z] == 0:
-        return True
-    # Water is handled separately — callers use _is_water
-    return False
-
-
-def _is_water(voxel_grid: VoxelGrid, x: int, y: int, z: int) -> bool:
-    if not voxel_grid.in_bounds(x, y, z):
-        return False
-    return voxel_grid.get(x, y, z) == VOXEL_WATER
 
 
 def compute_los(

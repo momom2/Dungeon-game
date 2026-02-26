@@ -6,10 +6,16 @@ Each save file is a zip archive containing:
 - game_state.json: build_mode, game_over, seed
 - move_system.json: held_materials, temperatures, humidities, metal_types
 - build_system.json: dig_queue, active_digs, pending_digs
-- intruders.json: Full agent state with serialized PersonalMaps
+- intruders.json: Full agent state with serialized PersonalMaps,
+  equipment (item template names + charges), familiars, supplies
 - parties.json: Party composition linked by intruder id
 - core.json: DungeonCore HP/position
 - intruder_ai.json: Spawn counters and flags
+
+Dependencies: config, intruders.personal_map, intruders.agent,
+    intruders.archetypes, intruders.equipment, intruders.familiar,
+    intruders.party, building.build_system
+Dependents: main (wiring), tests/core/test_save_system.py
 """
 
 from __future__ import annotations
@@ -78,6 +84,107 @@ def _deserialize_personal_map(data: dict) -> Any:
     return pmap
 
 
+def _serialize_equipment(equipment: Any) -> dict:
+    """Serialize an Equipment instance to a JSON-safe dict."""
+    gear: list[dict] = []
+    for slot, item in equipment.gear_slots.items():
+        gear.append({
+            "slot": slot.name,
+            "template_name": item.template.name,
+            "charges_remaining": item.charges_remaining,
+        })
+    inventory: list[dict] = []
+    for item in equipment.inventory:
+        inventory.append({
+            "template_name": item.template.name,
+            "charges_remaining": item.charges_remaining,
+        })
+    return {
+        "base_slots": equipment._base_slots,
+        "gear": gear,
+        "inventory": inventory,
+    }
+
+
+def _deserialize_equipment(data: dict) -> Any:
+    """Deserialize an Equipment instance from a JSON dict."""
+    from dungeon_builder.intruders.equipment import (
+        Equipment,
+        GearSlot,
+        ItemInstance,
+        ITEM_TEMPLATE_BY_NAME,
+    )
+
+    base_slots = data.get("base_slots", 3)
+    equip = Equipment(base_slots)
+
+    for gear_entry in data.get("gear", []):
+        template = ITEM_TEMPLATE_BY_NAME.get(gear_entry["template_name"])
+        if template is None:
+            logger.warning("Unknown item template '%s', skipping", gear_entry["template_name"])
+            continue
+        item = ItemInstance(template)
+        item.charges_remaining = gear_entry.get("charges_remaining", template.charges)
+        try:
+            slot = GearSlot[gear_entry["slot"]]
+        except KeyError:
+            logger.warning("Unknown gear slot '%s', skipping", gear_entry["slot"])
+            continue
+        equip.gear_slots[slot] = item
+
+    for inv_entry in data.get("inventory", []):
+        template = ITEM_TEMPLATE_BY_NAME.get(inv_entry["template_name"])
+        if template is None:
+            logger.warning("Unknown item template '%s', skipping", inv_entry["template_name"])
+            continue
+        item = ItemInstance(template)
+        item.charges_remaining = inv_entry.get("charges_remaining", template.charges)
+        equip.inventory.append(item)
+
+    return equip
+
+
+def _serialize_familiar(familiar: Any) -> dict:
+    """Serialize a Familiar to a JSON-safe dict."""
+    return {
+        "id": familiar.id,
+        "owner_id": familiar.owner_id,
+        "x": familiar.x,
+        "y": familiar.y,
+        "z": familiar.z,
+        "hp": familiar.hp,
+        "max_hp": familiar.max_hp,
+        "state": familiar.state.name,
+        "unruliness": familiar.unruliness,
+        "dig_target": familiar.dig_target,
+        "dig_progress": {
+            _pos_to_str(k): v for k, v in familiar.dig_progress.items()
+        },
+    }
+
+
+def _deserialize_familiar(data: dict) -> Any:
+    """Deserialize a Familiar from a JSON dict."""
+    from dungeon_builder.intruders.familiar import Familiar, FamiliarState
+
+    f = Familiar(
+        familiar_id=data["id"],
+        owner_id=data["owner_id"],
+        x=data["x"],
+        y=data["y"],
+        z=data["z"],
+    )
+    f.hp = data.get("hp", f.hp)
+    f.max_hp = data.get("max_hp", f.max_hp)
+    f.state = FamiliarState[data.get("state", "FOLLOWING")]
+    f.unruliness = data.get("unruliness", 0.0)
+    target = data.get("dig_target")
+    f.dig_target = tuple(target) if target is not None else None
+    raw_dp = data.get("dig_progress", {})
+    f.dig_progress = {_str_to_pos(k): v for k, v in raw_dp.items()}
+    return f
+
+
 def _serialize_intruder(intruder: Any) -> dict:
     """Serialize a single Intruder to a JSON-safe dict."""
     data: dict[str, Any] = {
@@ -88,6 +195,7 @@ def _serialize_intruder(intruder: Any) -> dict:
         "z": intruder.z,
         "hp": intruder.hp,
         "max_hp": intruder.max_hp,
+        "shield_hp": intruder.shield_hp,
         "state": intruder.state.name,
         "objective": intruder.objective.name,
         "path": intruder.path,
@@ -101,15 +209,19 @@ def _serialize_intruder(intruder: Any) -> dict:
         "interaction_type": intruder.interaction_type,
         "interaction_target": intruder.interaction_target,
         "interaction_ticks": intruder.interaction_ticks,
-        "frenzy_active": intruder.frenzy_active,
         "loot_count": intruder.loot_count,
-        "is_underworlder": intruder.is_underworlder,
         "level": intruder.level,
         "status": intruder.status.name,
         "morale": intruder.morale,
+        "food": intruder.food,
+        "water": intruder.water,
+        "maps_collected": intruder.maps_collected,
+        "entertainment": intruder.entertainment,
         "personal_map": _serialize_personal_map(intruder.personal_map),
+        "equipment": _serialize_equipment(intruder.equipment),
+        "familiars": [_serialize_familiar(f) for f in intruder.familiars],
     }
-    # dig_progress: dict of tuple keys → int values
+    # dig_progress: dict of tuple keys -> int values
     data["dig_progress"] = {
         _pos_to_str(k): v for k, v in intruder.dig_progress.items()
     }
@@ -121,13 +233,12 @@ def _deserialize_intruder(data: dict) -> Any:
     from dungeon_builder.intruders.agent import Intruder, IntruderState
     from dungeon_builder.intruders.archetypes import (
         ARCHETYPE_BY_NAME,
-        UNDERWORLD_ARCHETYPE_BY_NAME,
         IntruderObjective,
         IntruderStatus,
     )
 
     name = data["archetype_name"]
-    archetype = ARCHETYPE_BY_NAME.get(name) or UNDERWORLD_ARCHETYPE_BY_NAME.get(name)
+    archetype = ARCHETYPE_BY_NAME.get(name)
     if archetype is None:
         logger.warning("Unknown archetype '%s', skipping intruder %d", name, data["id"])
         return None
@@ -135,6 +246,11 @@ def _deserialize_intruder(data: dict) -> Any:
     pmap = _deserialize_personal_map(data["personal_map"])
     objective = IntruderObjective[data["objective"]]
     status = IntruderStatus[data["status"]]
+
+    # Deserialize equipment before constructing the Intruder so we can pass it in
+    equipment = None
+    if "equipment" in data:
+        equipment = _deserialize_equipment(data["equipment"])
 
     intruder = Intruder(
         intruder_id=data["id"],
@@ -144,8 +260,8 @@ def _deserialize_intruder(data: dict) -> Any:
         archetype=archetype,
         objective=objective,
         personal_map=pmap,
+        equipment=equipment,
         party_id=data.get("party_id"),
-        is_underworlder=data.get("is_underworlder", False),
         level=data.get("level", 1),
         status=status,
     )
@@ -153,6 +269,7 @@ def _deserialize_intruder(data: dict) -> Any:
     # Override mutable state that the constructor initialized
     intruder.hp = data["hp"]
     intruder.max_hp = data["max_hp"]
+    intruder.shield_hp = data.get("shield_hp", 0)
     intruder.state = IntruderState[data["state"]]
     intruder.path = data.get("path")
     # Paths are lists of lists in JSON; convert back to tuples
@@ -168,9 +285,17 @@ def _deserialize_intruder(data: dict) -> Any:
     target = data.get("interaction_target")
     intruder.interaction_target = tuple(target) if target is not None else None
     intruder.interaction_ticks = data.get("interaction_ticks", 0)
-    intruder.frenzy_active = data.get("frenzy_active", False)
     intruder.loot_count = data.get("loot_count", 0)
     intruder.morale = data.get("morale", 0.5)
+    intruder.food = data.get("food", archetype.food_capacity)
+    intruder.water = data.get("water", archetype.water_capacity)
+    intruder.maps_collected = data.get("maps_collected", 0)
+    intruder.entertainment = data.get("entertainment", 1.0)
+
+    # Familiars
+    intruder.familiars = [
+        _deserialize_familiar(fd) for fd in data.get("familiars", [])
+    ]
 
     # dig_progress
     raw_dp = data.get("dig_progress", {})
@@ -250,10 +375,9 @@ class SaveData:
     active_digs: list[dict] = field(default_factory=list)
     pending_digs: list[dict] = field(default_factory=list)
 
-    # Intruders (raw dicts → deserialized later or on access)
+    # Intruders (raw dicts -> deserialized later or on access)
     intruders: list[Any] = field(default_factory=list)
     parties: list[dict] = field(default_factory=list)
-    underworld_parties: list[dict] = field(default_factory=list)
 
     # IntruderAI counters
     next_intruder_id: int = 1
@@ -374,8 +498,7 @@ class SaveSystem:
                 }
 
             parties_data = {
-                "surface": [_serialize_party(p) for p in intruder_ai.parties],
-                "underworld": [_serialize_party(p) for p in intruder_ai._underworld_parties],
+                "parties": [_serialize_party(p) for p in intruder_ai.parties],
             }
             zf.writestr("parties.json", json.dumps(parties_data, indent=2))
 
@@ -471,8 +594,8 @@ class SaveSystem:
 
                 # 8. Parties
                 parties = json.loads(zf.read("parties.json"))
-                sd.parties = parties.get("surface", [])
-                sd.underworld_parties = parties.get("underworld", [])
+                # Support both old format ("surface" key) and new ("parties" key)
+                sd.parties = parties.get("parties", parties.get("surface", []))
 
                 # 9. IntruderAI counters
                 ai = json.loads(zf.read("intruder_ai.json"))
@@ -562,7 +685,7 @@ class SaveSystem:
         # Build intruder lookup for party reconstruction
         intruder_by_id: dict[int, Any] = {i.id: i for i in sd.intruders}
 
-        # Reconstruct surface parties
+        # Reconstruct parties
         intruder_ai.parties = []
         for pdata in sd.parties:
             members = [intruder_by_id[mid] for mid in pdata["member_ids"]
@@ -573,7 +696,6 @@ class SaveSystem:
                 party.members = members
                 party._leader_id = None
                 party._objective = None
-                party._heal_tick_counter = 0
                 from dungeon_builder.config import MAP_SHARE_INTERVAL
                 party._share_tick_counter = MAP_SHARE_INTERVAL - 1
                 # Re-elect and re-vote
@@ -584,31 +706,10 @@ class SaveSystem:
                     m.party_id = party.id
                 intruder_ai.parties.append(party)
 
-        # Reconstruct underworld parties
-        intruder_ai._underworld_parties = []
-        for pdata in sd.underworld_parties:
-            members = [intruder_by_id[mid] for mid in pdata["member_ids"]
-                        if mid in intruder_by_id]
-            if members:
-                party = Party.__new__(Party)
-                party.id = pdata["id"]
-                party.members = members
-                party._leader_id = None
-                party._objective = None
-                party._heal_tick_counter = 0
-                from dungeon_builder.config import MAP_SHARE_INTERVAL
-                party._share_tick_counter = MAP_SHARE_INTERVAL - 1
-                party._elect_leader()
-                party._vote_objective()
-                for m in members:
-                    m.party_id = party.id
-                intruder_ai._underworld_parties.append(party)
-
         # Reset transient AI state
         intruder_ai._spawn_timer = 0
-        intruder_ai._underworld_spawn_timer = 0
         intruder_ai._alarm_cooldowns = {}
 
         logger.info("Save data applied (tick %d, %d intruders, %d parties)",
                      sd.tick_count, len(sd.intruders),
-                     len(intruder_ai.parties) + len(intruder_ai._underworld_parties))
+                     len(intruder_ai.parties))

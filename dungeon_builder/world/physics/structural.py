@@ -11,6 +11,9 @@ Models real architectural principles:
 - Tensile failure: bending moment in cantilevers exceeds tensile strength
   (tension = load × span / 2, simply-supported beam approximation)
 - Foundation: deeper blocks bear accumulated weight from above
+
+Dependencies: config, core.event_bus, world.voxel_grid
+Dependents: main (wiring), tests/physics/test_structural.py
 """
 
 from __future__ import annotations
