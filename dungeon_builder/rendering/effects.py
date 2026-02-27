@@ -5,6 +5,10 @@ glows) are attached to the layer system so they inherit z-level alpha
 transparency.  Interaction feedback (hover highlight, drag box) bypasses
 layers and renders on top of everything.
 
+Craft-mode enhancements: colour-coded hover wireframe (green valid, hidden
+invalid), semi-transparent ghost block preview, and placement flash
+animation.
+
 Dependencies: config, rendering.layer_slice
 Dependents: main (wiring), tests/rendering/test_effects.py
 """
@@ -211,6 +215,11 @@ class EffectsRenderer:
         # Drag-select preview box (hidden by default)
         self._drag_box_np: NodePath | None = None
 
+        # Craft-mode visual state
+        self._craft_mode: bool = False
+        self._ghost_np: NodePath | None = None
+        self._flash_nps: list[NodePath] = []  # Pool of reusable flash markers
+
         # Create the reusable highlight cube (hidden initially)
         self._init_highlight()
         self._init_drag_box()
@@ -219,6 +228,12 @@ class EffectsRenderer:
         event_bus.subscribe("voxel_hover_clear", self._on_voxel_hover_clear)
         event_bus.subscribe("craft_highlights_updated", self._on_craft_highlights_updated)
         event_bus.subscribe("craft_highlights_cleared", self._on_craft_highlights_cleared)
+        event_bus.subscribe("craft_hover_valid", self._on_craft_hover_valid)
+        event_bus.subscribe("craft_hover_invalid", self._on_craft_hover_invalid)
+        event_bus.subscribe("craft_hover_clear", self._on_craft_hover_clear)
+        event_bus.subscribe("craft_placement_flash", self._on_craft_placement_flash)
+        event_bus.subscribe("craft_mode_entered", self._on_craft_mode_entered)
+        event_bus.subscribe("craft_mode_exited", self._on_craft_mode_exited)
         event_bus.subscribe("dig_pending", self._on_dig_pending)
         event_bus.subscribe("dig_cancelled", self._on_dig_cancelled)
         event_bus.subscribe("dig_queued", self._on_dig_promoted)
@@ -286,15 +301,138 @@ class EffectsRenderer:
             self._drag_box_np.hide()
 
     def _on_voxel_hover(self, x: int, y: int, z: int) -> None:
-        """Move highlight cube to the hovered voxel."""
-        if self._highlight_np is not None:
+        """Move highlight cube to the hovered voxel.
+
+        In craft mode the wireframe colour is handled by the
+        craft_hover_valid / craft_hover_invalid handlers instead.
+        """
+        if self._highlight_np is None:
+            return
+        if self._craft_mode:
+            # Position is set; visibility is managed by craft hover handlers
             self._highlight_np.set_pos(x, y, -z)
-            self._highlight_np.show()
+            return
+        # Normal (non-craft) hover: white wireframe
+        self._highlight_np.set_color_scale(1, 1, 1, 1)
+        self._highlight_np.set_pos(x, y, -z)
+        self._highlight_np.show()
 
     def _on_voxel_hover_clear(self, **kwargs) -> None:
         """Hide highlight cube when no voxel is hovered."""
         if self._highlight_np is not None:
             self._highlight_np.hide()
+        self._hide_ghost_preview()
+
+    # ── Craft-mode hover feedback ────────────────────────────────────
+
+    def _on_craft_mode_entered(self, **kwargs) -> None:
+        """Track that we're in craft mode for hover colouring."""
+        self._craft_mode = True
+
+    def _on_craft_mode_exited(self, **kwargs) -> None:
+        """Leave craft mode — reset wireframe colour, hide ghost."""
+        self._craft_mode = False
+        if self._highlight_np is not None:
+            self._highlight_np.set_color_scale(1, 1, 1, 1)
+        self._hide_ghost_preview()
+
+    def _on_craft_hover_valid(
+        self, x: int, y: int, z: int,
+        output_vtype: int = 0, **kwargs,
+    ) -> None:
+        """Show green wireframe and ghost preview at a valid craft position."""
+        if self._highlight_np is not None:
+            r, g, b, a = _cfg.CRAFT_HOVER_VALID_COLOR
+            self._highlight_np.set_color_scale(r, g, b, a)
+            self._highlight_np.set_pos(x, y, -z)
+            self._highlight_np.show()
+        self._show_ghost_preview(x, y, z, output_vtype)
+
+    def _on_craft_hover_invalid(self, x: int, y: int, z: int, **kwargs) -> None:
+        """Hide wireframe on invalid craft position."""
+        if self._highlight_np is not None:
+            self._highlight_np.hide()
+        self._hide_ghost_preview()
+
+    def _on_craft_hover_clear(self, **kwargs) -> None:
+        """Clear craft hover state (mouse left grid)."""
+        if self._highlight_np is not None:
+            self._highlight_np.hide()
+        self._hide_ghost_preview()
+
+    # ── Ghost block preview ──────────────────────────────────────────
+
+    def _show_ghost_preview(self, x: int, y: int, z: int, output_vtype: int) -> None:
+        """Show a semi-transparent preview of the output block at (x, y, z)."""
+        if output_vtype == 0:
+            self._hide_ghost_preview()
+            return
+
+        color = _cfg.VOXEL_COLORS.get(output_vtype, (0.5, 0.5, 0.5, 1.0))
+
+        if self._ghost_np is None:
+            # Create a white-base marker, tinted per-use via color_scale
+            node = _make_glow_marker(1.0, 1.0, 1.0, 1.0, name="ghost_preview")
+            np = self.app.render.attach_new_node(node)
+            np.set_transparency(TransparencyAttrib.M_alpha)
+            np.set_light_off()
+            np.set_bin("fixed", 48)  # Above craft markers (45), below wireframe (50)
+            np.set_depth_write(False)
+            np.set_depth_test(False)
+            self._ghost_np = np
+
+        ghost_alpha = _cfg.CRAFT_GHOST_OPACITY
+        self._ghost_np.set_color_scale(color[0], color[1], color[2], ghost_alpha)
+        self._ghost_np.set_pos(x, y, -z)
+        self._ghost_np.show()
+
+    def _hide_ghost_preview(self) -> None:
+        """Hide the ghost preview marker."""
+        if self._ghost_np is not None:
+            self._ghost_np.hide()
+
+    # ── Placement flash ──────────────────────────────────────────────
+
+    def _on_craft_placement_flash(self, x: int, y: int, z: int, **kwargs) -> None:
+        """Show a bright pulse at the crafted position that fades out."""
+        flash = self._get_flash_marker()
+        r, g, b, a = _cfg.CRAFT_FLASH_COLOR
+        flash.set_color_scale(r, g, b, a)
+        flash.set_pos(x, y, -z)
+        flash.show()
+
+        duration = _cfg.CRAFT_FLASH_DURATION
+        task_name = f"craft_flash_{id(flash)}"
+
+        def _fade(task):
+            elapsed = task.time
+            if elapsed >= duration:
+                flash.hide()
+                return task.done
+            t = 1.0 - (elapsed / duration)
+            flash.set_color_scale(r, g, b, a * t)
+            return task.cont
+
+        self.app.taskMgr.remove(task_name)
+        self.app.taskMgr.add(_fade, task_name)
+
+    def _get_flash_marker(self) -> NodePath:
+        """Return a pooled flash marker, creating one if needed."""
+        # Reuse a hidden marker from the pool
+        for np in self._flash_nps:
+            if np.is_hidden():
+                return np
+        # Create a new one
+        node = _make_glow_marker(1.0, 1.0, 1.0, 1.0, name="craft_flash")
+        np = self.app.render.attach_new_node(node)
+        np.set_transparency(TransparencyAttrib.M_alpha)
+        np.set_light_off()
+        np.set_bin("fixed", 52)  # Above wireframe (50)
+        np.set_depth_write(False)
+        np.set_depth_test(False)
+        np.hide()
+        self._flash_nps.append(np)
+        return np
 
     def place_core_marker(self, x: int, y: int, z: int) -> None:
         """Place a visual marker at the dungeon core position."""

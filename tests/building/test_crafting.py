@@ -294,11 +294,11 @@ def test_spike_trap_no_floor():
 
 
 def test_door():
-    """Enchanted metal on air between two opposite walls -> door (closed)."""
+    """Metal ingot on air between two opposite walls -> door (closed)."""
     bus, grid, ms, cs, gs = _setup()
     grid.grid[3, 4, 4] = VOXEL_STONE  # -X wall
     grid.grid[5, 4, 4] = VOXEL_STONE  # +X wall
-    ms.held_materials = {VOXEL_ENCHANTED_METAL: 1}
+    ms.held_materials = {VOXEL_IRON_INGOT: 1}
 
     successes = _craft(bus, cs, "Door", 4, 4, 4)
 
@@ -309,10 +309,10 @@ def test_door():
 
 
 def test_door_no_opposite_walls():
-    """Enchanted metal with only one wall -> not in highlights."""
+    """Metal ingot with only one wall -> not in highlights."""
     bus, grid, ms, cs, gs = _setup()
     grid.grid[3, 4, 4] = VOXEL_STONE  # only -X wall, no +X wall
-    ms.held_materials = {VOXEL_ENCHANTED_METAL: 1}
+    ms.held_materials = {VOXEL_IRON_INGOT: 1}
 
     bus.publish("craft_recipe_selected", recipe_name="Door")
     cs._current_z = 4
@@ -502,8 +502,8 @@ def test_craft_cancel_exits_mode():
     assert len(clear_events) == 1
 
 
-def test_click_non_highlighted_cancels():
-    """Clicking a non-highlighted position cancels craft mode."""
+def test_click_non_highlighted_stays_in_craft_mode():
+    """Clicking a non-highlighted position warns but stays in craft mode."""
     bus, grid, ms, cs, gs = _setup()
     grid.grid[4, 4, 4] = VOXEL_STONE
     ms.held_materials = {VOXEL_IRON_INGOT: 1}
@@ -512,10 +512,17 @@ def test_click_non_highlighted_cancels():
     bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
     assert gs.craft_mode_active is True
 
+    errors = []
+    bus.subscribe("error_message", lambda **kw: errors.append(kw))
+
     # Click a position that's NOT highlighted (0,0,0) is air, not a valid target
     bus.publish("craft_at_position", x=0, y=0, z=0)
 
-    assert gs.craft_mode_active is False
+    # Should stay in craft mode with an error message
+    assert gs.craft_mode_active is True
+    assert cs.is_craft_mode_active is True
+    assert len(errors) == 1
+    assert "cannot craft" in errors[0]["text"].lower()
 
 
 def test_material_depleted_exits_craft_mode():
@@ -760,9 +767,9 @@ class TestExistingRecipesMetalType:
         grid.grid[3, 4, 4] = VOXEL_STONE
         grid.grid[5, 4, 4] = VOXEL_STONE
         _craft_nbc(bus, cs, "Door", 4, 4, 4, ms,
-               {VOXEL_ENCHANTED_METAL: 1}, {VOXEL_ENCHANTED_METAL: METAL_ENCH_COPPER})
+               {VOXEL_COPPER_INGOT: 1}, {VOXEL_COPPER_INGOT: METAL_COPPER})
         assert grid.get(4, 4, 4) == VOXEL_DOOR
-        assert grid.get_metal_type(4, 4, 4) == METAL_ENCH_COPPER
+        assert grid.get_metal_type(4, 4, 4) == METAL_COPPER
 
 
 # ---------------------------------------------------------------------------
@@ -827,9 +834,9 @@ class TestHeatBeacon:
         grid.grid[4, 4, 4] = VOXEL_STONE
         grid.temperature[4, 4, 4] = 300.0
         _craft_nbc(bus, cs, "Heat Beacon", 4, 4, 4, ms,
-               {VOXEL_COPPER_INGOT: 1}, {VOXEL_COPPER_INGOT: METAL_COPPER})
+               {VOXEL_ENCHANTED_METAL: 1}, {VOXEL_ENCHANTED_METAL: METAL_ENCH_COPPER})
         assert grid.get(4, 4, 4) == VOXEL_HEAT_BEACON
-        assert grid.get_metal_type(4, 4, 4) == METAL_COPPER
+        assert grid.get_metal_type(4, 4, 4) == METAL_ENCH_COPPER
 
     def test_heat_beacon_requires_temperature(self):
         """Heat beacon fails if stone temperature <= 200."""
@@ -841,16 +848,15 @@ class TestHeatBeacon:
         bus.publish("craft_recipe_selected", recipe_name="Heat Beacon")
         assert (4, 4, 4) not in cs._highlighted_positions
 
-    def test_heat_beacon_requires_copper(self):
-        """Heat beacon only accepts copper ingot."""
+    def test_heat_beacon_requires_metal(self):
+        """Heat beacon only accepts metal ingot or enchanted metal."""
         bus, grid, ms, cs = _setup_nbc()
         grid.grid[4, 4, 4] = VOXEL_STONE
         grid.temperature[4, 4, 4] = 300.0
-        ms.held_materials = {VOXEL_IRON_INGOT: 1}
+        ms.held_materials = {VOXEL_DIRT: 1}
         cs._current_z = 4
         bus.publish("craft_recipe_selected", recipe_name="Heat Beacon")
-        # Iron ingot not in required_inputs for heat beacon
-        # This should fail at recipe selection (no matching held type)
+        # Dirt not in required_inputs for heat beacon
         assert cs._active_recipe is None or cs._active_recipe.name != "Heat Beacon"
 
 
@@ -890,16 +896,16 @@ class TestIronBars:
         grid.grid[3, 4, 4] = VOXEL_STONE
         grid.grid[5, 4, 4] = VOXEL_STONE
         _craft_nbc(bus, cs, "Iron Bars", 4, 4, 4, ms,
-               {VOXEL_ENCHANTED_METAL: 1}, {VOXEL_ENCHANTED_METAL: METAL_ENCH_GOLD})
+               {VOXEL_GOLD_INGOT: 1}, {VOXEL_GOLD_INGOT: METAL_GOLD})
         assert grid.get(4, 4, 4) == VOXEL_IRON_BARS
-        assert grid.get_metal_type(4, 4, 4) == METAL_ENCH_GOLD
+        assert grid.get_metal_type(4, 4, 4) == METAL_GOLD
 
     def test_iron_bars_needs_opposite_walls(self):
         """Iron bars fail without 2 opposite walls."""
         bus, grid, ms, cs = _setup_nbc()
         grid.grid[4, 4, 4] = VOXEL_AIR
         grid.grid[3, 4, 4] = VOXEL_STONE  # only one wall
-        ms.held_materials = {VOXEL_ENCHANTED_METAL: 1}
+        ms.held_materials = {VOXEL_IRON_INGOT: 1}
         cs._current_z = 4
         bus.publish("craft_recipe_selected", recipe_name="Iron Bars")
         assert (4, 4, 4) not in cs._highlighted_positions
@@ -915,9 +921,9 @@ class TestFloodgate:
         grid.grid[4, 4, 4] = VOXEL_STONE
         grid.grid[5, 4, 4] = VOXEL_WATER  # adjacent water
         _craft_nbc(bus, cs, "Floodgate", 4, 4, 4, ms,
-               {VOXEL_ENCHANTED_METAL: 1}, {VOXEL_ENCHANTED_METAL: METAL_ENCH_IRON})
+               {VOXEL_IRON_INGOT: 1}, {VOXEL_IRON_INGOT: METAL_IRON})
         assert grid.get(4, 4, 4) == VOXEL_FLOODGATE
-        assert grid.get_metal_type(4, 4, 4) == METAL_ENCH_IRON
+        assert grid.get_metal_type(4, 4, 4) == METAL_IRON
         assert grid.get_block_state(4, 4, 4) == 1  # starts closed
 
     def test_floodgate_needs_adjacent_water(self):
@@ -925,7 +931,7 @@ class TestFloodgate:
         bus, grid, ms, cs = _setup_nbc()
         grid.grid[4, 4, 4] = VOXEL_STONE
         # No water nearby
-        ms.held_materials = {VOXEL_ENCHANTED_METAL: 1}
+        ms.held_materials = {VOXEL_IRON_INGOT: 1}
         cs._current_z = 4
         bus.publish("craft_recipe_selected", recipe_name="Floodgate")
         assert (4, 4, 4) not in cs._highlighted_positions
@@ -937,7 +943,7 @@ class TestFloodgate:
         grid.grid[5, 4, 4] = VOXEL_AIR
         grid.water_level[5, 4, 4] = 100  # water level but not VOXEL_WATER
         _craft_nbc(bus, cs, "Floodgate", 4, 4, 4, ms,
-               {VOXEL_ENCHANTED_METAL: 1}, {VOXEL_ENCHANTED_METAL: METAL_ENCH_COPPER})
+               {VOXEL_COPPER_INGOT: 1}, {VOXEL_COPPER_INGOT: METAL_COPPER})
         assert grid.get(4, 4, 4) == VOXEL_FLOODGATE
 
 
@@ -1163,3 +1169,273 @@ class TestMetalTypeFallback:
         bus.publish("craft_at_position", x=4, y=4, z=4)
         assert grid.get(4, 4, 4) == VOXEL_PIPE
         assert grid.get_metal_type(4, 4, 4) == METAL_COPPER
+
+
+# ===========================================================================
+# Craft UI experience tests (hover feedback, forgiving misclick, etc.)
+# ===========================================================================
+
+
+class TestCraftModeHoverFeedback:
+    """Hover events during craft mode publish craft_hover_valid/invalid."""
+
+    def test_hover_valid_position(self):
+        """Hovering a highlighted position publishes craft_hover_valid."""
+        bus, grid, ms, cs, gs = _setup()
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 1}
+
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        assert (4, 4, 4) in cs._highlighted_positions
+
+        valid_events = []
+        bus.subscribe("craft_hover_valid", lambda **kw: valid_events.append(kw))
+
+        bus.publish("voxel_hover", x=4, y=4, z=4)
+
+        assert len(valid_events) == 1
+        assert valid_events[0]["x"] == 4
+        assert valid_events[0]["recipe_name"] == "Reinforced Wall"
+        assert valid_events[0]["output_vtype"] == VOXEL_REINFORCED_WALL
+
+    def test_hover_invalid_position(self):
+        """Hovering a non-highlighted position publishes craft_hover_invalid."""
+        bus, grid, ms, cs, gs = _setup()
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 1}
+
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+
+        invalid_events = []
+        bus.subscribe("craft_hover_invalid", lambda **kw: invalid_events.append(kw))
+
+        bus.publish("voxel_hover", x=0, y=0, z=0)  # Air, not highlighted
+
+        assert len(invalid_events) == 1
+        assert invalid_events[0]["x"] == 0
+
+    def test_hover_clear_publishes_craft_hover_clear(self):
+        """Mouse leaving grid in craft mode publishes craft_hover_clear."""
+        bus, grid, ms, cs, gs = _setup()
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 1}
+
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+
+        clear_events = []
+        bus.subscribe("craft_hover_clear", lambda **kw: clear_events.append(True))
+
+        bus.publish("voxel_hover_clear")
+
+        assert len(clear_events) == 1
+
+    def test_no_hover_events_outside_craft_mode(self):
+        """Hovering outside craft mode does not publish craft hover events."""
+        bus, grid, ms, cs, gs = _setup()
+        grid.grid[4, 4, 4] = VOXEL_STONE
+
+        valid = []
+        invalid = []
+        bus.subscribe("craft_hover_valid", lambda **kw: valid.append(kw))
+        bus.subscribe("craft_hover_invalid", lambda **kw: invalid.append(kw))
+
+        bus.publish("voxel_hover", x=4, y=4, z=4)
+
+        assert len(valid) == 0
+        assert len(invalid) == 0
+
+
+class TestCraftModeStaysOnMisclick:
+    """Clicking non-highlighted positions stays in craft mode (forgiving)."""
+
+    def test_misclick_shows_error_stays_active(self):
+        """Non-highlighted click shows error but keeps craft mode."""
+        bus, grid, ms, cs, gs = _setup()
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 2}
+
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        assert gs.craft_mode_active is True
+
+        errors = []
+        bus.subscribe("error_message", lambda **kw: errors.append(kw))
+
+        # Click non-highlighted air
+        bus.publish("craft_at_position", x=0, y=0, z=0)
+
+        assert gs.craft_mode_active is True
+        assert len(errors) == 1
+
+    def test_esc_still_exits(self):
+        """ESC / right-click (craft_cancel) still exits craft mode."""
+        bus, grid, ms, cs, gs = _setup()
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 1}
+
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        assert gs.craft_mode_active is True
+
+        bus.publish("craft_cancel")
+
+        assert gs.craft_mode_active is False
+
+    def test_can_still_craft_after_misclick(self):
+        """Player can still craft at a valid position after a misclick."""
+        bus, grid, ms, cs, gs = _setup()
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 2}
+
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+
+        # Misclick on air
+        bus.publish("craft_at_position", x=0, y=0, z=0)
+        assert gs.craft_mode_active is True
+
+        # Now craft at the actual valid position
+        successes = []
+        bus.subscribe("craft_success", lambda **kw: successes.append(kw))
+        bus.publish("craft_at_position", x=4, y=4, z=4)
+
+        assert len(successes) == 1
+        assert grid.get(4, 4, 4) == VOXEL_REINFORCED_WALL
+
+
+class TestCraftRemainingCount:
+    """Remaining count is published on enter and after each craft."""
+
+    def test_remaining_on_enter(self):
+        """craft_remaining_updated published when entering craft mode."""
+        bus, grid, ms, cs, gs = _setup()
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 5}
+
+        remaining_events = []
+        bus.subscribe("craft_remaining_updated", lambda **kw: remaining_events.append(kw))
+
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+
+        assert len(remaining_events) == 1
+        assert remaining_events[0]["remaining"] == 5
+        assert remaining_events[0]["recipe_name"] == "Reinforced Wall"
+
+    def test_remaining_decreases_after_craft(self):
+        """Count decreases after successful craft."""
+        bus, grid, ms, cs, gs = _setup()
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        grid.grid[5, 5, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 3}
+
+        remaining_events = []
+        bus.subscribe("craft_remaining_updated", lambda **kw: remaining_events.append(kw))
+
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        # First event: enter (3)
+        assert remaining_events[-1]["remaining"] == 3
+
+        bus.publish("craft_at_position", x=4, y=4, z=4)
+        # Second event: after craft (2)
+        assert remaining_events[-1]["remaining"] == 2
+
+
+class TestCraftPlacementFlash:
+    """Placement flash event on successful craft."""
+
+    def test_flash_on_success(self):
+        """craft_placement_flash published on successful craft."""
+        bus, grid, ms, cs, gs = _setup()
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 1}
+
+        flashes = []
+        bus.subscribe("craft_placement_flash", lambda **kw: flashes.append(kw))
+
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        bus.publish("craft_at_position", x=4, y=4, z=4)
+
+        assert len(flashes) == 1
+        assert flashes[0]["x"] == 4
+        assert flashes[0]["y"] == 4
+        assert flashes[0]["z"] == 4
+
+    def test_no_flash_on_invalid_click(self):
+        """No flash when clicking non-highlighted position."""
+        bus, grid, ms, cs, gs = _setup()
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 1}
+
+        flashes = []
+        bus.subscribe("craft_placement_flash", lambda **kw: flashes.append(kw))
+
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        bus.publish("craft_at_position", x=0, y=0, z=0)  # Invalid
+
+        assert len(flashes) == 0
+
+
+class TestCraftRecipeOutputVtype:
+    """CraftingRecipe.output_vtype field exists with correct values."""
+
+    def test_output_vtype_field_exists(self):
+        """All recipes have output_vtype attribute."""
+        from dungeon_builder.building.crafting_book import CraftingBook
+        book = CraftingBook()
+        for recipe in book.recipes:
+            assert hasattr(recipe, "output_vtype")
+            assert isinstance(recipe.output_vtype, int)
+
+    def test_known_output_vtypes(self):
+        """Recipes with fixed output have correct output_vtype."""
+        from dungeon_builder.building.crafting_book import CraftingBook
+        book = CraftingBook()
+        expected = {
+            "Marble Wall": VOXEL_MARBLE,
+            "Obsidian Forge": VOXEL_OBSIDIAN,
+            "Reinforced Wall": VOXEL_REINFORCED_WALL,
+            "Spike Trap": VOXEL_SPIKE,
+            "Door": VOXEL_DOOR,
+            "Treasure": VOXEL_TREASURE,
+            "Tarp": VOXEL_TARP,
+            "Slope": VOXEL_SLOPE,
+            "Stairs": VOXEL_STAIRS,
+        }
+        for name, expected_vtype in expected.items():
+            recipe = book.get_recipe_by_name(name)
+            assert recipe is not None, f"Recipe '{name}' not found"
+            assert recipe.output_vtype == expected_vtype, (
+                f"{name}: expected {expected_vtype}, got {recipe.output_vtype}"
+            )
+
+    def test_variable_output_is_zero(self):
+        """Ore Smelting has output_vtype=0 (variable output)."""
+        from dungeon_builder.building.crafting_book import CraftingBook
+        book = CraftingBook()
+        recipe = book.get_recipe_by_name("Ore Smelting")
+        assert recipe is not None
+        assert recipe.output_vtype == 0
+
+    def test_output_vtype_included_in_hover_event(self):
+        """craft_hover_valid includes output_vtype from the recipe."""
+        bus, grid, ms, cs, gs = _setup()
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 1}
+
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+
+        valid_events = []
+        bus.subscribe("craft_hover_valid", lambda **kw: valid_events.append(kw))
+
+        bus.publish("voxel_hover", x=4, y=4, z=4)
+
+        assert len(valid_events) == 1
+        assert valid_events[0]["output_vtype"] == VOXEL_REINFORCED_WALL

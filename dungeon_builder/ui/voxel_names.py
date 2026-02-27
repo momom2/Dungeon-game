@@ -23,4 +23,5 @@ VTYPE_NAMES: dict[int, str] = {
     81: "Iron Bars", 82: "Floodgate", 83: "Alarm Bell",
     84: "Fragile Floor", 85: "Pipe", 86: "Pump", 87: "Steam Vent",
     88: "Water Source", 89: "Water Sink", 90: "Lava Source", 91: "Lava Sink",
+    92: "Enchanted Door", 93: "Enchanted Floodgate",
 }

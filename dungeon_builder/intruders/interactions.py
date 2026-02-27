@@ -9,7 +9,8 @@ and interaction speed scale from numeric stats (``damage``, ``can_bash_door``,
 ``can_fly``, etc.) rather than hard-coded archetype identities.
 
 Dependencies: config, intruders.agent (TYPE_CHECKING only)
-Dependents: intruders.decision, tests/intruders/test_interactions.py
+Dependents: intruders.decision, tests/intruders/test_interactions.py,
+    tests/intruders/test_ai_improvements.py
 """
 
 from __future__ import annotations
@@ -39,6 +40,8 @@ from dungeon_builder.config import (
     VOXEL_PIPE,
     VOXEL_PUMP,
     VOXEL_STEAM_VENT,
+    VOXEL_ENCHANTED_DOOR,
+    VOXEL_ENCHANTED_FLOODGATE,
     SPIKE_DAMAGE,
     ROLLING_STONE_DAMAGE,
     DOOR_BASH_TICKS,
@@ -247,6 +250,32 @@ def handle_block(
 
     # -- Floodgate -----------------------------------------------------
     if voxel_type == VOXEL_FLOODGATE:
+        if block_state == 0:  # Open
+            return InteractionInfo(InteractionResult.CONTINUE)
+        return InteractionInfo(InteractionResult.REPATH)  # Closed
+
+    # -- Enchanted Door ------------------------------------------------
+    if voxel_type == VOXEL_ENCHANTED_DOOR:
+        if block_state == 0:  # Open
+            return InteractionInfo(InteractionResult.CONTINUE)
+        # Closed enchanted door — same interactions as regular door
+        if arch.can_lockpick:
+            return InteractionInfo(
+                InteractionResult.INTERACT,
+                ticks=DOOR_LOCKPICK_TICKS,
+                interaction_type="lockpick",
+            )
+        if arch.can_bash_door:
+            bash_ticks = max(1, DOOR_BASH_TICKS - arch.damage // 2)
+            return InteractionInfo(
+                InteractionResult.INTERACT,
+                ticks=bash_ticks,
+                interaction_type="bash_door",
+            )
+        return InteractionInfo(InteractionResult.REPATH)
+
+    # -- Enchanted Floodgate -------------------------------------------
+    if voxel_type == VOXEL_ENCHANTED_FLOODGATE:
         if block_state == 0:  # Open
             return InteractionInfo(InteractionResult.CONTINUE)
         return InteractionInfo(InteractionResult.REPATH)  # Closed

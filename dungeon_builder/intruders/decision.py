@@ -16,7 +16,9 @@ Dependencies: config, core.event_bus, world.voxel_grid, world.pathfinding,
     intruders.vision, intruders.interactions, intruders.knowledge_archive,
     intruders.reputation
 Dependents: main (wiring), tests/intruders/, tests/physics/test_water.py,
-    tests/ui/test_debug_spawn_buttons.py
+    tests/ui/test_debug_spawn_buttons.py,
+    tests/building/test_pressure_plate_chain.py,
+    tests/benchmarks/benchmark_performance.py
 """
 
 from __future__ import annotations
@@ -79,6 +81,8 @@ from dungeon_builder.config import (
     VOXEL_ALARM_BELL,
     VOXEL_FRAGILE_FLOOR,
     VOXEL_STEAM_VENT,
+    VOXEL_ENCHANTED_DOOR,
+    VOXEL_ENCHANTED_FLOODGATE,
     SURFACE_Z,
     DIG_DURATION,
     NON_DIGGABLE,
@@ -97,6 +101,9 @@ from dungeon_builder.config import (
     WATER_CURRENT_PUSH_THRESHOLD,
     SUPPLY_SAFETY_MARGIN,
     SUPPLY_COST_PER_CELL,
+    DARKVISION_DEPTH_THRESHOLD,
+    EXPLORE_FRONTIER_MAX_CANDIDATES,
+    EXPLORE_DEPTH_WEIGHT,
 )
 
 _HAZARD_TYPES = frozenset((
@@ -151,8 +158,11 @@ class IntruderAI:
 
         # Alarm bell cooldown tracking: pos -> remaining ticks
         self._alarm_cooldowns: dict[tuple[int, int, int], int] = {}
+        # Mana power flag — when False, magical traps are deactivated
+        self._traps_powered: bool = True
 
         event_bus.subscribe("tick", self._on_tick)
+        event_bus.subscribe("mana_power_changed", self._on_mana_power_changed)
         event_bus.subscribe("intruder_needs_repath", self._on_needs_repath)
         event_bus.subscribe("game_over", self._on_game_over)
         event_bus.subscribe("voxel_changed", self._on_voxel_changed)
@@ -171,6 +181,9 @@ class IntruderAI:
 
     def _on_dev_mode_changed(self, **kwargs) -> None:
         self.spawning_enabled = not _cfg.DEV_MODE
+
+    def _on_mana_power_changed(self, traps_powered: bool, **kw) -> None:
+        self._traps_powered = traps_powered
 
     def _on_tick(self, tick: int) -> None:
         if self._game_over:
@@ -560,8 +573,13 @@ class IntruderAI:
         # Track hazards known before vision update (for morale penalty)
         hazards_before = len(pmap.hazards)
 
+        # Effective perception: base + torch bonus + darkvision underground
+        eff_range = intruder.effective_perception
+        if z > SURFACE_Z + DARKVISION_DEPTH_THRESHOLD:
+            eff_range += arch.darkvision_range
+
         # Standard LOS (with vision deception for certain blocks)
-        visible = compute_los(grid, x, y, z, arch.perception_range)
+        visible = compute_los(grid, x, y, z, eff_range)
         for vx, vy, vz in visible:
             vtype = grid.get(vx, vy, vz)
             bstate = int(grid.block_state[vx, vy, vz])
@@ -1020,8 +1038,10 @@ class IntruderAI:
 
         Retreat triggers (checked in order):
         1. Morale-based flee (below MORALE_FLEE_THRESHOLD)
-        2. HP-based retreat (below retreat_threshold, amplified by low morale)
-        3. Supply-based retreat (food or water insufficient for return trip)
+        2. HP-based retreat (below retreat_threshold, modulated by risk_tolerance
+           and morale)
+        3. Supply-based retreat (food or water insufficient for return trip,
+           with risk_tolerance reducing the safety margin)
         """
         arch = intruder.archetype
 
@@ -1033,11 +1053,12 @@ class IntruderAI:
             self._start_retreat(intruder)
             return
 
-        # HP-based retreat
+        # HP-based retreat (risk_tolerance lowers effective threshold)
         if arch.retreat_threshold > 0:
             hp_ratio = intruder.hp / intruder.max_hp
+            # Bold intruders retreat at lower HP thresholds
+            threshold = arch.retreat_threshold * (1.0 - arch.risk_tolerance * 0.5)
             # Low morale doubles the retreat threshold (flee at higher HP)
-            threshold = arch.retreat_threshold
             if intruder.morale < MORALE_LOW_THRESHOLD:
                 threshold *= MORALE_RETREAT_MULTIPLIER
 
@@ -1046,11 +1067,13 @@ class IntruderAI:
                 return
 
         # Supply-based retreat: ensure enough food/water to get back
+        # Bold intruders accept thinner safety margins
+        risk_margin = SUPPLY_SAFETY_MARGIN * (1.0 - arch.risk_tolerance * 0.2)
         return_cost = self._estimate_return_cost(intruder)
-        if intruder.food < return_cost * SUPPLY_SAFETY_MARGIN:
+        if intruder.food < return_cost * risk_margin:
             self._start_retreat(intruder)
             return
-        if intruder.water < return_cost * SUPPLY_SAFETY_MARGIN:
+        if intruder.water < return_cost * risk_margin:
             self._start_retreat(intruder)
             return
 
@@ -1103,7 +1126,13 @@ class IntruderAI:
                 self._start_retreat(intruder)
                 return
         elif intruder.state in (IntruderState.ADVANCING, IntruderState.SPAWNING):
-            goal = (self.core.x, self.core.y, self.core.z)
+            if intruder.objective == IntruderObjective.EXPLORE:
+                goal = self._pick_explore_target(intruder)
+                if goal is None:
+                    self._start_retreat(intruder)
+                    return
+            else:
+                goal = (self.core.x, self.core.y, self.core.z)
         else:
             return
 
@@ -1139,6 +1168,62 @@ class IntruderAI:
                 intruder.path = None
                 intruder._path_cache_key = None
 
+    # -- Explore target selection ----------------------------------------
+
+    def _pick_explore_target(
+        self, intruder: Intruder,
+    ) -> tuple[int, int, int] | None:
+        """Pick the best frontier cell for an EXPLORE-objective intruder.
+
+        Frontier cells (revealed cells with unrevealed neighbors) are scored
+        using a blend of depth (deeper = more interesting) and proximity
+        (closer = more efficient).  ``exploration_drive`` biases the blend:
+        high drive favors depth, low drive favors proximity.
+
+        Returns *None* when the frontier is empty (everything explored).
+        """
+        frontier = intruder.personal_map.get_frontier()
+        if not frontier:
+            return None
+
+        arch = intruder.archetype
+        ix, iy, iz = intruder.x, intruder.y, intruder.z
+        grid_h = self.voxel_grid.height
+
+        # Depth weight blended with exploration_drive
+        depth_w = EXPLORE_DEPTH_WEIGHT * (0.5 + arch.exploration_drive * 0.5)
+        prox_w = 1.0 - depth_w
+
+        # Score each frontier cell
+        scored: list[tuple[float, tuple[int, int, int]]] = []
+        for fx, fy, fz in frontier:
+            # Depth score: deeper (higher z) = higher score, normalised 0-1
+            depth_score = fz / grid_h if grid_h > 0 else 0.0
+            # Proximity score: closer = higher, inverted Manhattan, normalised
+            dist = abs(fx - ix) + abs(fy - iy) + abs(fz - iz)
+            max_dist = grid_h + self.voxel_grid.width + self.voxel_grid.depth
+            prox_score = 1.0 - (dist / max_dist) if max_dist > 0 else 0.0
+            score = depth_score * depth_w + prox_score * prox_w
+            scored.append((score, (fx, fy, fz)))
+
+        # Sort descending by score and pick from top candidates
+        scored.sort(key=lambda s: s[0], reverse=True)
+        top_n = min(EXPLORE_FRONTIER_MAX_CANDIDATES, len(scored))
+        candidates = scored[:top_n]
+
+        # Weighted random selection from top candidates
+        total = sum(s for s, _ in candidates)
+        if total <= 0:
+            return candidates[0][1]
+
+        roll = self.rng.random() * total
+        cumulative = 0.0
+        for score, pos in candidates:
+            cumulative += score
+            if roll < cumulative:
+                return pos
+        return candidates[-1][1]
+
     # -- Pressure plate activation --------------------------------------
 
     def _activate_pressure_plate(
@@ -1146,11 +1231,17 @@ class IntruderAI:
     ) -> None:
         """Activate a pressure plate and trigger adjacent traps.
 
+        Only fires when mana is powering traps (``_traps_powered``).
+
         Within PRESSURE_PLATE_TRIGGER_RANGE, activates:
         - Spikes: set block_state = 1 (extended)
-        - Doors: set block_state = 1 (closed)
-        - Floodgates: toggle block_state (open<->closed)
+        - Enchanted Doors: toggle block_state (open↔closed)
+        - Enchanted Floodgates: toggle block_state (open↔closed)
+
+        Regular doors and floodgates do NOT respond to pressure plates.
         """
+        if not self._traps_powered:
+            return
         grid = self.voxel_grid
         r = PRESSURE_PLATE_TRIGGER_RANGE
         for dx in range(-r, r + 1):
@@ -1164,9 +1255,11 @@ class IntruderAI:
                     vtype = grid.get(nx, ny, nz)
                     if vtype == VOXEL_SPIKE:
                         grid.set_block_state(nx, ny, nz, 1)  # Extend
-                    elif vtype == VOXEL_DOOR:
-                        grid.set_block_state(nx, ny, nz, 1)  # Close
-                    elif vtype == VOXEL_FLOODGATE:
+                    elif vtype == VOXEL_ENCHANTED_DOOR:
+                        # Toggle: open->closed, closed->open
+                        old = int(grid.block_state[nx, ny, nz])
+                        grid.set_block_state(nx, ny, nz, 1 - old)
+                    elif vtype == VOXEL_ENCHANTED_FLOODGATE:
                         # Toggle: open->closed, closed->open
                         old = int(grid.block_state[nx, ny, nz])
                         grid.set_block_state(nx, ny, nz, 1 - old)
@@ -1214,7 +1307,11 @@ class IntruderAI:
         Alarm bells detect intruders within ALARM_BELL_DETECTION_RANGE
         (Manhattan distance) and publish an alarm event. Each bell has a
         cooldown (tracked in ``_alarm_cooldowns``) to prevent spam.
+
+        Deactivated when mana is depleted (``_traps_powered`` is False).
         """
+        if not self._traps_powered:
+            return
         grid = self.voxel_grid
         ix, iy, iz = intruder.x, intruder.y, intruder.z
         r = ALARM_BELL_DETECTION_RANGE

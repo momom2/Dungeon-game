@@ -2,7 +2,8 @@
 
 Covers: IntruderAI._activate_pressure_plate() and the pressure plate trigger
 within _move_to().  Verifies that stepping on a pressure plate (or grabbing
-gold bait) triggers adjacent spikes, doors, and floodgates as expected.
+gold bait) triggers adjacent spikes, enchanted doors, and enchanted floodgates
+as expected.  Regular doors/floodgates do NOT respond to pressure plates.
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ from dungeon_builder.config import (
     VOXEL_SPIKE,
     VOXEL_DOOR,
     VOXEL_FLOODGATE,
+    VOXEL_ENCHANTED_DOOR,
+    VOXEL_ENCHANTED_FLOODGATE,
     VOXEL_PRESSURE_PLATE,
     VOXEL_GOLD_BAIT,
     PRESSURE_PLATE_TRIGGER_RANGE,
@@ -98,10 +101,25 @@ class TestPressurePlateToSpike:
         assert int(grid.block_state[4, 0, 1]) == 1, "Spike should be extended"
 
 
-class TestPressurePlateToDoor:
-    """Plate at (3,0,1) adjacent to door at (3,1,1): door should close."""
+class TestPressurePlateToEnchantedDoor:
+    """Plate at (3,0,1) adjacent to enchanted door at (3,1,1): door should close."""
 
-    def test_adjacent_door_closes(self):
+    def test_adjacent_enchanted_door_closes(self):
+        ai, bus, grid = _make_ai()
+        grid.set(3, 0, 1, VOXEL_PRESSURE_PLATE)
+        grid.set_block_state(3, 0, 1, 0)
+        grid.set(3, 1, 1, VOXEL_ENCHANTED_DOOR)
+        grid.set_block_state(3, 1, 1, 0)  # open
+
+        intruder = _make_intruder(2, 0, 1)
+        ai.intruders.append(intruder)
+
+        ai._move_to(intruder, (3, 0, 1))
+
+        assert int(grid.block_state[3, 1, 1]) == 1, "Enchanted door should be closed"
+
+    def test_regular_door_not_affected(self):
+        """Regular doors do NOT respond to pressure plates."""
         ai, bus, grid = _make_ai()
         grid.set(3, 0, 1, VOXEL_PRESSURE_PLATE)
         grid.set_block_state(3, 0, 1, 0)
@@ -113,13 +131,42 @@ class TestPressurePlateToDoor:
 
         ai._move_to(intruder, (3, 0, 1))
 
-        assert int(grid.block_state[3, 1, 1]) == 1, "Door should be closed"
+        assert int(grid.block_state[3, 1, 1]) == 0, "Regular door should NOT respond"
 
 
-class TestPressurePlateFloodgateToggle:
-    """Floodgate toggles open/closed each activation."""
+class TestPressurePlateEnchantedFloodgateToggle:
+    """Enchanted floodgate toggles open/closed each activation."""
 
-    def test_floodgate_toggles_open_to_closed(self):
+    def test_enchanted_floodgate_toggles_open_to_closed(self):
+        ai, bus, grid = _make_ai()
+        grid.set(3, 0, 1, VOXEL_PRESSURE_PLATE)
+        grid.set_block_state(3, 0, 1, 0)
+        grid.set(4, 0, 1, VOXEL_ENCHANTED_FLOODGATE)
+        grid.set_block_state(4, 0, 1, 0)  # open
+
+        intruder = _make_intruder(2, 0, 1)
+        ai.intruders.append(intruder)
+
+        ai._move_to(intruder, (3, 0, 1))
+
+        assert int(grid.block_state[4, 0, 1]) == 1, "Enchanted floodgate should toggle to closed"
+
+    def test_enchanted_floodgate_toggles_closed_to_open(self):
+        ai, bus, grid = _make_ai()
+        grid.set(3, 0, 1, VOXEL_PRESSURE_PLATE)
+        grid.set_block_state(3, 0, 1, 0)
+        grid.set(4, 0, 1, VOXEL_ENCHANTED_FLOODGATE)
+        grid.set_block_state(4, 0, 1, 1)  # closed
+
+        intruder = _make_intruder(2, 0, 1)
+        ai.intruders.append(intruder)
+
+        ai._move_to(intruder, (3, 0, 1))
+
+        assert int(grid.block_state[4, 0, 1]) == 0, "Enchanted floodgate should toggle to open"
+
+    def test_regular_floodgate_not_affected(self):
+        """Regular floodgates do NOT respond to pressure plates."""
         ai, bus, grid = _make_ai()
         grid.set(3, 0, 1, VOXEL_PRESSURE_PLATE)
         grid.set_block_state(3, 0, 1, 0)
@@ -131,21 +178,7 @@ class TestPressurePlateFloodgateToggle:
 
         ai._move_to(intruder, (3, 0, 1))
 
-        assert int(grid.block_state[4, 0, 1]) == 1, "Floodgate should toggle to closed"
-
-    def test_floodgate_toggles_closed_to_open(self):
-        ai, bus, grid = _make_ai()
-        grid.set(3, 0, 1, VOXEL_PRESSURE_PLATE)
-        grid.set_block_state(3, 0, 1, 0)
-        grid.set(4, 0, 1, VOXEL_FLOODGATE)
-        grid.set_block_state(4, 0, 1, 1)  # closed
-
-        intruder = _make_intruder(2, 0, 1)
-        ai.intruders.append(intruder)
-
-        ai._move_to(intruder, (3, 0, 1))
-
-        assert int(grid.block_state[4, 0, 1]) == 0, "Floodgate should toggle to open"
+        assert int(grid.block_state[4, 0, 1]) == 0, "Regular floodgate should NOT respond"
 
 
 class TestPressurePlateOnlyTriggersOnce:
@@ -155,7 +188,7 @@ class TestPressurePlateOnlyTriggersOnce:
         ai, bus, grid = _make_ai()
         grid.set(3, 0, 1, VOXEL_PRESSURE_PLATE)
         grid.set_block_state(3, 0, 1, 0)  # armed
-        grid.set(4, 0, 1, VOXEL_FLOODGATE)
+        grid.set(4, 0, 1, VOXEL_ENCHANTED_FLOODGATE)
         grid.set_block_state(4, 0, 1, 0)  # open
 
         intruder = _make_intruder(2, 0, 1)
@@ -164,7 +197,7 @@ class TestPressurePlateOnlyTriggersOnce:
         # First step: triggers the plate
         ai._move_to(intruder, (3, 0, 1))
         assert int(grid.block_state[3, 0, 1]) == 1, "Plate should be armed"
-        assert int(grid.block_state[4, 0, 1]) == 1, "Floodgate toggled to closed"
+        assert int(grid.block_state[4, 0, 1]) == 1, "Enchanted floodgate toggled to closed"
 
         # Move away and back — plate already triggered (state=1)
         ai._move_to(intruder, (2, 0, 1))
@@ -174,22 +207,22 @@ class TestPressurePlateOnlyTriggersOnce:
 
         # Floodgate should remain open because the plate is already state=1
         assert int(grid.block_state[4, 0, 1]) == 0, (
-            "Floodgate should NOT toggle again — plate already triggered"
+            "Enchanted floodgate should NOT toggle again — plate already triggered"
         )
 
 
 class TestPressurePlateMultiTarget:
-    """A plate adjacent to both a spike and a door activates both."""
+    """A plate adjacent to both a spike and an enchanted door activates both."""
 
-    def test_spike_and_door_both_activate(self):
+    def test_spike_and_enchanted_door_both_activate(self):
         ai, bus, grid = _make_ai()
         grid.set(3, 0, 1, VOXEL_PRESSURE_PLATE)
         grid.set_block_state(3, 0, 1, 0)
         # Spike to the right
         grid.set(4, 0, 1, VOXEL_SPIKE)
         grid.set_block_state(4, 0, 1, 0)
-        # Door to the front (y+1)
-        grid.set(3, 1, 1, VOXEL_DOOR)
+        # Enchanted door to the front (y+1)
+        grid.set(3, 1, 1, VOXEL_ENCHANTED_DOOR)
         grid.set_block_state(3, 1, 1, 0)
 
         intruder = _make_intruder(2, 0, 1)
@@ -198,7 +231,7 @@ class TestPressurePlateMultiTarget:
         ai._move_to(intruder, (3, 0, 1))
 
         assert int(grid.block_state[4, 0, 1]) == 1, "Spike should be extended"
-        assert int(grid.block_state[3, 1, 1]) == 1, "Door should be closed"
+        assert int(grid.block_state[3, 1, 1]) == 1, "Enchanted door should be closed"
 
 
 class TestPressurePlateOutOfRange:
@@ -250,10 +283,10 @@ class TestGoldBaitTriggersTraps:
             "Adjacent spike should extend when gold bait is grabbed"
         )
 
-    def test_bait_grab_activates_adjacent_floodgate(self):
+    def test_bait_grab_activates_adjacent_enchanted_floodgate(self):
         ai, bus, grid = _make_ai()
         grid.set(5, 0, 1, VOXEL_GOLD_BAIT)
-        grid.set(5, 1, 1, VOXEL_FLOODGATE)
+        grid.set(5, 1, 1, VOXEL_ENCHANTED_FLOODGATE)
         grid.set_block_state(5, 1, 1, 0)  # open
 
         pmap = PersonalMap()
@@ -268,7 +301,7 @@ class TestGoldBaitTriggersTraps:
         ai._update_interacting(intruder)
 
         assert int(grid.block_state[5, 1, 1]) == 1, (
-            "Adjacent floodgate should toggle when gold bait is grabbed"
+            "Adjacent enchanted floodgate should toggle when gold bait is grabbed"
         )
 
 

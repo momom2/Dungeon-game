@@ -26,6 +26,13 @@ from dungeon_builder.config import (
 )
 
 
+class _FakeArchetype:
+    """Minimal archetype stub for archive tests."""
+
+    def __init__(self, map_memory: float = 1.0):
+        self.map_memory = map_memory
+
+
 class _FakeIntruder:
     """Minimal intruder stub for archive tests."""
 
@@ -33,9 +40,11 @@ class _FakeIntruder:
         self,
         personal_map: PersonalMap | None = None,
         status: IntruderStatus = IntruderStatus.GRUNT,
+        map_memory: float = 1.0,
     ):
         self.personal_map = personal_map or PersonalMap()
         self.status = status
+        self.archetype = _FakeArchetype(map_memory)
 
 
 # ---------- FactionMap basics ----------

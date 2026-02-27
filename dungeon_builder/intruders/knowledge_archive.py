@@ -8,7 +8,7 @@ it. Player modifications to the dungeon also increase uncertainty in archived ce
 Dependencies: config, intruders.agent, intruders.archetypes,
     intruders.personal_map
 Dependents: intruders.decision, tests/intruders/test_knowledge_archive.py,
-    tests/intruders/test_social_dynamics.py
+    tests/intruders/test_ai_improvements.py
 """
 
 from __future__ import annotations
@@ -73,6 +73,10 @@ class KnowledgeArchive:
         uncertainty, weighted by relative trust. Confirmations (same vtype)
         decrease uncertainty.
 
+        ``map_memory`` (archetype stat, 0.0–1.0) affects archive quality:
+        - Used as a cell-retention filter: low memory forgets some cells.
+        - Scales the survivor's trust weight: sharper memory = more credible.
+
         Parameters
         ----------
         intruder : Intruder
@@ -84,9 +88,18 @@ class KnowledgeArchive:
 
         faction = self._data
         pmap = intruder.personal_map
-        survivor_trust = STATUS_TRUST.get(intruder.status, 0.5)
+        memory = intruder.archetype.map_memory
+        # Trust weight scaled by how good the intruder's memory is
+        survivor_trust = STATUS_TRUST.get(intruder.status, 0.5) * max(0.1, memory)
 
         for pos, vtype in pmap.seen.items():
+            # Memory filter: low map_memory = some cells forgotten
+            # Uses deterministic hash so the same cell is always kept/dropped
+            # for a given memory level (no RNG needed).
+            if memory < 1.0:
+                if (hash(pos) % 100) >= int(memory * 100):
+                    continue
+
             if pos in faction.seen:
                 existing_vtype, _existing_tick, existing_trust = faction.seen[pos]
                 if existing_vtype != vtype:

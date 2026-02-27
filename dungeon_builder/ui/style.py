@@ -22,6 +22,8 @@ ERROR_COLOR = (1.0, 0.3, 0.3, 1)        # Errors, close buttons, core HP
 SUCCESS_COLOR = (0.3, 1.0, 0.3, 1)      # Craft success, enabled states
 ENABLED_COLOR = (0.3, 1.0, 0.3, 1)       # Green — available/active
 DISABLED_COLOR = (0.4, 0.4, 0.4, 1)      # Grey — unavailable/inactive
+CRAFT_STATUS_COLOR = (0.4, 0.9, 0.4, 1)  # Craft-mode HUD label colour
+MANA_COLOR = (0.3, 0.5, 1.0, 1)          # Mana bar / mana cost text
 
 # ── Button styling ───────────────────────────────────────────────────────
 

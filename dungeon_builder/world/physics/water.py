@@ -31,6 +31,8 @@ from dungeon_builder.config import (
     VOXEL_OBSIDIAN,
     VOXEL_DOOR,
     VOXEL_FLOODGATE,
+    VOXEL_ENCHANTED_DOOR,
+    VOXEL_ENCHANTED_FLOODGATE,
     VOXEL_WATER_SOURCE,
     VOXEL_WATER_SINK,
     VOXEL_LAVA_SOURCE,
@@ -779,7 +781,10 @@ class WaterPhysics:
         grid: VoxelGrid,
     ) -> None:
         """Force open closed doors/floodgates under fluid pressure."""
-        gate_types = frozenset({VOXEL_DOOR, VOXEL_FLOODGATE})
+        gate_types = frozenset({
+            VOXEL_DOOR, VOXEL_FLOODGATE,
+            VOXEL_ENCHANTED_DOOR, VOXEL_ENCHANTED_FLOODGATE,
+        })
         metal_type_arr = grid.metal_type
         block_state_arr = grid.block_state
 

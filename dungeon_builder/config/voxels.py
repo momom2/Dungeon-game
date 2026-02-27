@@ -87,3 +87,7 @@ VOXEL_WATER_SOURCE = 88   # Always full (water_level=255), water flows out natur
 VOXEL_WATER_SINK = 89     # Always empty (water_level=0, humidity=0), absorbs by physics
 VOXEL_LAVA_SOURCE = 90    # Always LAVA_TEMPERATURE, regenerates lava in adjacent air
 VOXEL_LAVA_SINK = 91      # Always cool, absorbs adjacent lava
+
+# Enchanted functional blocks (magical, mana-powered)
+VOXEL_ENCHANTED_DOOR = 92       # Responds to pressure plate signals
+VOXEL_ENCHANTED_FLOODGATE = 93  # Responds to pressure plate signals

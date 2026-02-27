@@ -8,8 +8,9 @@ vertically without slopes, phase-walkers can pass through thin walls, etc.
 Fire immunity is equipment-driven and passed as a separate flag.
 
 Dependencies: config, intruders.archetypes, intruders.personal_map
-Dependents: intruders.decision,
-    tests/intruders/test_personal_pathfinder.py
+Dependents: intruders.decision, tests/intruders/test_personal_pathfinder.py,
+    tests/intruders/test_ai_improvements.py,
+    tests/benchmarks/benchmark_performance.py
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ from dungeon_builder.config import (
     VOXEL_PIPE,
     VOXEL_PUMP,
     VOXEL_STEAM_VENT,
+    VOXEL_ENCHANTED_DOOR,
+    VOXEL_ENCHANTED_FLOODGATE,
     NON_DIGGABLE,
     PERSONAL_PATHFINDER_MAX_ITERATIONS,
     HAZARD_PATH_COST,
@@ -183,8 +186,8 @@ def _move_cost(
                 return None  # Can't go up through plain air without flying
         cost = base_cost if dz == 0 else PATHFINDING_VERTICAL_COST
         # Hazard modifiers
-        if pos in personal_map.hazards and archetype.cunning >= 0.5:
-            cost += HAZARD_PATH_COST
+        if pos in personal_map.hazards and archetype.cunning > 0:
+            cost += HAZARD_PATH_COST * archetype.cunning
         return cost
 
     # --- Doors ---
@@ -203,37 +206,37 @@ def _move_cost(
     # These are traversable (the interaction system handles what happens)
     if vtype in (VOXEL_SPIKE, VOXEL_TREASURE, VOXEL_TARP, VOXEL_ROLLING_STONE):
         cost = base_cost
-        if pos in personal_map.hazards and archetype.cunning >= 0.5:
-            cost += HAZARD_PATH_COST
+        if pos in personal_map.hazards and archetype.cunning > 0:
+            cost += HAZARD_PATH_COST * archetype.cunning
         return cost
 
     # --- New traversable blocks ---
     # Gold bait, heat beacon, alarm bell: traversable (interaction handles)
     if vtype in (VOXEL_GOLD_BAIT, VOXEL_HEAT_BEACON, VOXEL_ALARM_BELL):
         cost = base_cost
-        if pos in personal_map.hazards and archetype.cunning >= 0.5:
-            cost += HAZARD_PATH_COST
+        if pos in personal_map.hazards and archetype.cunning > 0:
+            cost += HAZARD_PATH_COST * archetype.cunning
         return cost
 
     # Pressure plate: traversable, cunning adds hazard cost
     if vtype == VOXEL_PRESSURE_PLATE:
         cost = base_cost
-        if pos in personal_map.hazards and archetype.cunning >= 0.5:
-            cost += HAZARD_PATH_COST
+        if pos in personal_map.hazards and archetype.cunning > 0:
+            cost += HAZARD_PATH_COST * archetype.cunning
         return cost
 
     # Fragile floor: traversable (looks like stone), hazard cost if known
     if vtype == VOXEL_FRAGILE_FLOOR:
         cost = base_cost
-        if pos in personal_map.hazards and archetype.cunning >= 0.5:
-            cost += HAZARD_PATH_COST
+        if pos in personal_map.hazards and archetype.cunning > 0:
+            cost += HAZARD_PATH_COST * archetype.cunning
         return cost
 
     # Steam vent: traversable, cunning adds hazard cost
     if vtype == VOXEL_STEAM_VENT:
         cost = base_cost
-        if pos in personal_map.hazards and archetype.cunning >= 0.5:
-            cost += HAZARD_PATH_COST
+        if pos in personal_map.hazards and archetype.cunning > 0:
+            cost += HAZARD_PATH_COST * archetype.cunning
         return cost
 
     # Iron bars: impassable (no one can pass through)
@@ -246,6 +249,24 @@ def _move_cost(
         if door_state == 0:  # Open
             return base_cost
         return None  # Closed — impassable
+
+    # Enchanted Door: same as regular door (lockpick/bash/repath)
+    if vtype == VOXEL_ENCHANTED_DOOR:
+        door_state = personal_map.get_door_state(*pos)
+        if door_state == 0:  # Open
+            return base_cost
+        if archetype.can_lockpick:
+            return base_cost + 5.0
+        if archetype.can_bash_door:
+            return base_cost + 15.0
+        return None
+
+    # Enchanted Floodgate: same as regular floodgate
+    if vtype == VOXEL_ENCHANTED_FLOODGATE:
+        door_state = personal_map.get_door_state(*pos)
+        if door_state == 0:  # Open
+            return base_cost
+        return None
 
     # Pipe / Pump: impassable solid
     if vtype in (VOXEL_PIPE, VOXEL_PUMP):

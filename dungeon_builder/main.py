@@ -96,6 +96,7 @@ from dungeon_builder.building.crafting_system import CraftingSystem
 from dungeon_builder.building.crafting_journal import CraftingJournal
 from dungeon_builder.intruders.decision import IntruderAI
 from dungeon_builder.dungeon_core.core import DungeonCore
+from dungeon_builder.dungeon_core.mana import ManaSystem
 from dungeon_builder.rendering.voxel_renderer import VoxelWorldRenderer
 from dungeon_builder.rendering.layer_slice import LayerSliceManager
 from dungeon_builder.rendering.camera import CameraController
@@ -172,6 +173,9 @@ class DungeonApp(ShowBase):
         build_system = BuildSystem(event_bus, voxel_grid, game_state=game_state)
         game_state.build_system = build_system
 
+        mana_system = ManaSystem(event_bus, voxel_grid, build_system)
+        game_state.mana_system = mana_system
+
         move_system = MoveSystem(event_bus, voxel_grid, game_state)
         game_state.move_system = move_system
 
@@ -179,7 +183,10 @@ class DungeonApp(ShowBase):
         if _cfg.DEV_MODE:
             self._fill_dev_bag(move_system)
 
-        crafting_system = CraftingSystem(event_bus, voxel_grid, move_system, game_state)
+        crafting_system = CraftingSystem(
+            event_bus, voxel_grid, move_system, game_state,
+            mana_system=mana_system,
+        )
 
         crafting_journal = CraftingJournal(event_bus, crafting_system.crafting_book)
         crafting_journal.discover_all()  # All recipes known for now

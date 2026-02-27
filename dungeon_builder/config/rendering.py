@@ -15,6 +15,8 @@ from .voxels import (
     VOXEL_CORE,
     VOXEL_DIRT,
     VOXEL_DOOR,
+    VOXEL_ENCHANTED_DOOR,
+    VOXEL_ENCHANTED_FLOODGATE,
     VOXEL_ENCHANTED_METAL,
     VOXEL_FLOODGATE,
     VOXEL_FRAGILE_FLOOR,
@@ -126,6 +128,8 @@ VOXEL_COLORS = {
     VOXEL_PRESSURE_PLATE: (0.45, 0.45, 0.48, 1.0),    # dark steel (base, tinted by metal)
     VOXEL_IRON_BARS: (0.50, 0.50, 0.55, 0.7),         # semi-transparent metal
     VOXEL_FLOODGATE: (0.40, 0.50, 0.65, 1.0),         # blue-steel (base, tinted by metal)
+    VOXEL_ENCHANTED_DOOR: (0.35, 0.25, 0.55, 1.0),       # purple-tinted
+    VOXEL_ENCHANTED_FLOODGATE: (0.30, 0.40, 0.70, 1.0),   # deep blue
     VOXEL_ALARM_BELL: (0.80, 0.70, 0.30, 1.0),        # brass (base, tinted by metal)
     VOXEL_FRAGILE_FLOOR: (0.5, 0.5, 0.5, 1.0),        # same as stone (deception!)
     VOXEL_PIPE: (0.72, 0.52, 0.35, 0.9),              # copper-ish (base, tinted by metal)
@@ -162,6 +166,8 @@ VOXEL_NOISE: dict[int, float] = {
     VOXEL_PRESSURE_PLATE: 0.03, # machined metal
     VOXEL_IRON_BARS: 0.03,      # uniform bars
     VOXEL_FLOODGATE: 0.03,      # machined metal
+    VOXEL_ENCHANTED_DOOR: 0.03,      # machined enchanted metal
+    VOXEL_ENCHANTED_FLOODGATE: 0.03, # machined enchanted metal
     VOXEL_ALARM_BELL: 0.03,     # polished bell
     VOXEL_FRAGILE_FLOOR: 0.06,  # same as stone (deception)
     VOXEL_PIPE: 0.03,           # smooth tube
@@ -172,3 +178,10 @@ VOXEL_NOISE: dict[int, float] = {
     VOXEL_LAVA_SOURCE: 0.12,    # roiling
     VOXEL_LAVA_SINK: 0.06,      # cooling crust
 }
+
+# ── Craft placement visual feedback ────────────────────────────────────
+
+CRAFT_HOVER_VALID_COLOR = (0.2, 0.9, 0.3, 0.85)   # Green wireframe on valid pos
+CRAFT_GHOST_OPACITY = 0.40                          # Semi-transparent ghost preview
+CRAFT_FLASH_DURATION = 0.3                          # Seconds for placement flash
+CRAFT_FLASH_COLOR = (0.9, 1.0, 0.9, 0.8)           # Bright white-green pulse

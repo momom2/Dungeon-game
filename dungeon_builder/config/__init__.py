@@ -31,3 +31,4 @@ from dungeon_builder.config.physics import *      # noqa: F401,F403
 from dungeon_builder.config.rendering import *    # noqa: F401,F403
 from dungeon_builder.config.intruders import *    # noqa: F401,F403
 from dungeon_builder.config.building import *     # noqa: F401,F403
+from dungeon_builder.config.economy import *      # noqa: F401,F403

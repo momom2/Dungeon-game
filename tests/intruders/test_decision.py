@@ -260,8 +260,10 @@ class TestRetreat:
         intruder.move_interval = 1
         ai.intruders.append(intruder)
 
-        # INQUISITOR retreat_threshold=0.10, max_hp=120 -> retreat at <12 HP
-        intruder.hp = 10
+        # INQUISITOR retreat_threshold=0.10, risk_tolerance=0.8
+        # effective threshold = 0.10 * (1 - 0.8*0.5) = 0.06
+        # 120 * 0.06 = 7.2 -> retreat at <8 HP
+        intruder.hp = 7
         ai._update_intruder(intruder)
         assert intruder.state == IntruderState.RETREATING
 
@@ -945,9 +947,10 @@ def test_intruder_retreats_at_low_hp():
     intruder.move_interval = 1
     ai.intruders.append(intruder)
 
-    # INQUISITOR retreat_threshold = 0.10, max_hp = 120
-    # 120 * 0.10 = 12 -> must be below 12
-    intruder.hp = 10
+    # INQUISITOR retreat_threshold=0.10, risk_tolerance=0.8
+    # effective threshold = 0.10 * (1 - 0.8*0.5) = 0.06
+    # 120 * 0.06 = 7.2 -> must be below 8
+    intruder.hp = 7
 
     ai._update_intruder(intruder)
     assert intruder.state == IntruderState.RETREATING

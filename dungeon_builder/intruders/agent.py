@@ -3,8 +3,12 @@
 Dependencies: config, intruders.archetypes, intruders.equipment,
     intruders.familiar, intruders.personal_map
 Dependents: core.save_system, intruders.decision, intruders.interactions,
-    intruders.knowledge_archive, intruders.party,
-    rendering.intruder_renderer, tests/intruders/
+    intruders.knowledge_archive, intruders.party, intruders.familiar,
+    rendering.intruder_renderer, tests/intruders/,
+    tests/physics/test_water.py, tests/core/test_save_system.py,
+    tests/rendering/test_intruder_renderer.py,
+    tests/building/test_pressure_plate_chain.py,
+    tests/benchmarks/benchmark_performance.py
 """
 
 from __future__ import annotations
@@ -231,6 +235,20 @@ class Intruder:
         """True if any carried equipment provides water breathing."""
         from dungeon_builder.intruders.equipment import ItemEffect as _IE
         return self.equipment.has_effect(_IE.WATER_BREATHING)
+
+    @property
+    def effective_perception(self) -> int:
+        """Perception range including equipment bonuses (torch ILLUMINATE).
+
+        Darkvision is NOT included here — it depends on position, so the
+        decision engine applies it separately in ``_update_vision``.
+        """
+        base = self.archetype.perception_range
+        from dungeon_builder.intruders.equipment import ItemEffect as _IE
+        torch = self.equipment.find_item(_IE.ILLUMINATE)
+        if torch is not None and not torch.depleted:
+            base += torch.template.value
+        return base
 
     @property
     def effective_food_rate(self) -> float:

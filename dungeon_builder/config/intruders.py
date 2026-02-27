@@ -177,3 +177,16 @@ PATHFINDING_VERTICAL_COST = 1.5
 # ── Vision ──────────────────────────────────────────────────────────────
 
 WATER_LOS_DEPTH = 2                   # Water blocks LOS after N consecutive cells
+
+# ── Darkvision ─────────────────────────────────────────────────────────────
+
+DARKVISION_DEPTH_THRESHOLD = 3        # z > SURFACE_Z + this = "dark" (darkvision applies)
+
+# ── Exploration (EXPLORE objective) ────────────────────────────────────────
+
+EXPLORE_FRONTIER_MAX_CANDIDATES = 20  # Max frontier targets evaluated per repath
+EXPLORE_DEPTH_WEIGHT = 0.6            # Weight for depth vs proximity in frontier scoring
+
+# ── Support aura ───────────────────────────────────────────────────────────
+
+SUPPORT_AURA_SIGHT_THRESHOLD = 1      # arcane_sight_range >= this = support role

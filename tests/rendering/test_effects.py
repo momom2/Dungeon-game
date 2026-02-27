@@ -129,3 +129,66 @@ class TestOreGlowScanLogic:
         # The ore now has an air neighbor — it would render normally
         neighbor = grid.get(5, 4, 4)
         assert neighbor == VOXEL_AIR
+
+
+# ===========================================================================
+# Craft-mode visual feedback (method existence checks)
+# ===========================================================================
+
+
+class TestCraftHoverVisuals:
+    """EffectsRenderer has craft hover handlers for colour-coded wireframe."""
+
+    def test_craft_hover_valid_handler_exists(self):
+        from dungeon_builder.rendering.effects import EffectsRenderer
+        assert hasattr(EffectsRenderer, "_on_craft_hover_valid")
+        assert callable(getattr(EffectsRenderer, "_on_craft_hover_valid"))
+
+    def test_craft_hover_invalid_handler_exists(self):
+        from dungeon_builder.rendering.effects import EffectsRenderer
+        assert hasattr(EffectsRenderer, "_on_craft_hover_invalid")
+        assert callable(getattr(EffectsRenderer, "_on_craft_hover_invalid"))
+
+    def test_craft_hover_clear_handler_exists(self):
+        from dungeon_builder.rendering.effects import EffectsRenderer
+        assert hasattr(EffectsRenderer, "_on_craft_hover_clear")
+        assert callable(getattr(EffectsRenderer, "_on_craft_hover_clear"))
+
+    def test_craft_placement_flash_handler_exists(self):
+        from dungeon_builder.rendering.effects import EffectsRenderer
+        assert hasattr(EffectsRenderer, "_on_craft_placement_flash")
+        assert callable(getattr(EffectsRenderer, "_on_craft_placement_flash"))
+
+    def test_show_ghost_preview_exists(self):
+        from dungeon_builder.rendering.effects import EffectsRenderer
+        assert hasattr(EffectsRenderer, "_show_ghost_preview")
+        assert callable(getattr(EffectsRenderer, "_show_ghost_preview"))
+
+    def test_hide_ghost_preview_exists(self):
+        from dungeon_builder.rendering.effects import EffectsRenderer
+        assert hasattr(EffectsRenderer, "_hide_ghost_preview")
+        assert callable(getattr(EffectsRenderer, "_hide_ghost_preview"))
+
+
+class TestCraftConfigConstants:
+    """Config constants for craft visual feedback exist with valid values."""
+
+    def test_craft_hover_valid_color(self):
+        from dungeon_builder.config import CRAFT_HOVER_VALID_COLOR
+        assert len(CRAFT_HOVER_VALID_COLOR) == 4
+        for c in CRAFT_HOVER_VALID_COLOR:
+            assert 0.0 <= c <= 1.0
+
+    def test_craft_ghost_opacity(self):
+        from dungeon_builder.config import CRAFT_GHOST_OPACITY
+        assert 0.0 < CRAFT_GHOST_OPACITY < 1.0
+
+    def test_craft_flash_duration(self):
+        from dungeon_builder.config import CRAFT_FLASH_DURATION
+        assert 0.0 < CRAFT_FLASH_DURATION <= 2.0
+
+    def test_craft_flash_color(self):
+        from dungeon_builder.config import CRAFT_FLASH_COLOR
+        assert len(CRAFT_FLASH_COLOR) == 4
+        for c in CRAFT_FLASH_COLOR:
+            assert 0.0 <= c <= 1.0

@@ -54,6 +54,10 @@ class HUD:
         # Render mode tracking (for context-specific hover info)
         self._render_mode = RENDER_MODE_MATTER
 
+        # Craft-mode tracking
+        self._craft_recipe_name: str | None = None
+        self._craft_remaining: int = 0
+
         # Intruder tracking
         self._intruder_count = 0
         self._archetype_counts: dict[str, int] = {}
@@ -85,6 +89,14 @@ class HUD:
             text_fg=_sty.ERROR_COLOR, text_scale=0.05,
             text_align=TextNode.A_left,
             pos=(-1.7, 0, 0.91),
+            frameColor=_sty.TRANSPARENT, parent=a2d,
+        )
+
+        self.mana_label = DirectLabel(
+            text="Mana: 0/1000",
+            text_fg=_sty.MANA_COLOR, text_scale=0.05,
+            text_align=TextNode.A_left,
+            pos=(-1.1, 0, 0.91),
             frameColor=_sty.TRANSPARENT, parent=a2d,
         )
 
@@ -277,8 +289,14 @@ class HUD:
         sub("voxel_hover_clear", self._on_voxel_hover_clear)
         sub("craft_mode_entered", self._on_craft_mode_entered)
         sub("craft_mode_exited", self._on_craft_mode_exited)
+        sub("craft_hover_valid", self._on_craft_hover_valid)
+        sub("craft_hover_invalid", self._on_craft_hover_invalid)
+        sub("craft_hover_clear", self._on_craft_hover_clear_hud)
+        sub("craft_remaining_updated", self._on_craft_remaining_updated)
         sub("render_mode_changed", self._on_render_mode_changed)
         sub("dev_mode_changed", self._on_dev_mode_changed)
+        sub("mana_changed", self._on_mana_changed)
+        sub("soul_captured", self._on_soul_captured)
 
     def _bind_keys(self) -> None:
         """Register keyboard shortcuts for speed control and inventory toggle."""
@@ -409,6 +427,12 @@ class HUD:
     def _on_core_damaged(self, hp: int, max_hp: int) -> None:
         self.core_hp_label["text"] = f"Core: {hp}/{max_hp}"
 
+    def _on_mana_changed(self, mana: float, max_mana: float, **kw) -> None:
+        self.mana_label["text"] = f"Mana: {int(mana)}/{int(max_mana)}"
+
+    def _on_soul_captured(self, souls: int, max_mana: float, **kw) -> None:
+        self._show_error(f"Soul captured! (+100 max mana)", color=_sty.MANA_COLOR)
+
     def _on_tick(self, tick: int) -> None:
         if tick % 10 == 0:
             self.time_label["text"] = f"Tick: {tick}"
@@ -528,7 +552,14 @@ class HUD:
             self.reputation_label["text_fg"] = (0.6, 0.6, 0.6, 1)
 
     def _on_voxel_hover(self, x: int, y: int, z: int, **kwargs) -> None:
-        """Display voxel type, coordinates, and mode-specific data when hovering."""
+        """Display voxel type, coordinates, and mode-specific data when hovering.
+
+        When craft mode is active, the craft hover handlers set the label
+        instead (skip generic text to avoid flickering).
+        """
+        if self._craft_recipe_name is not None:
+            return  # Craft hover handlers manage the label
+
         grid = self.game_state.voxel_grid
         if grid is None:
             return
@@ -557,11 +588,49 @@ class HUD:
         self._render_mode = mode
 
     def _on_craft_mode_entered(self, recipe_name: str, **kwargs) -> None:
-        self.tool_label["text"] = f"Crafting: {recipe_name} (click to place, ESC to cancel)"
-        self.tool_label["text_fg"] = _sty.ENABLED_COLOR
+        self._craft_recipe_name = recipe_name
+        self._update_craft_tool_label()
 
     def _on_craft_mode_exited(self, **kwargs) -> None:
+        self._craft_recipe_name = None
+        self._craft_remaining = 0
         mode = self.game_state.build_mode
         label = "Dig" if mode == "dig" else "Move"
         self.tool_label["text"] = f"Tool: {label} [X]"
         self.tool_label["text_fg"] = (0.8, 0.8, 1, 1)
+        self.hover_label["text"] = ""
+
+    def _on_craft_remaining_updated(
+        self, recipe_name: str, remaining: int, **kwargs,
+    ) -> None:
+        """Update stored remaining count and refresh the tool label."""
+        self._craft_remaining = remaining
+        self._update_craft_tool_label()
+
+    def _update_craft_tool_label(self) -> None:
+        """Refresh the tool label with recipe name and remaining count."""
+        if self._craft_recipe_name is None:
+            return
+        text = f"Crafting: {self._craft_recipe_name}"
+        if self._craft_remaining > 0:
+            text += f" \u2014 {self._craft_remaining} remaining"
+        text += " (click to place, ESC to cancel)"
+        self.tool_label["text"] = text
+        self.tool_label["text_fg"] = _sty.CRAFT_STATUS_COLOR
+
+    def _on_craft_hover_valid(
+        self, x: int, y: int, z: int, recipe_name: str = "", **kwargs,
+    ) -> None:
+        """Show green hover text for a valid craft position."""
+        name = recipe_name or self._craft_recipe_name or "?"
+        self.hover_label["text"] = f"Click to craft {name} at ({x}, {y}, {-z})"
+        self.hover_label["text_fg"] = _sty.SUCCESS_COLOR
+
+    def _on_craft_hover_invalid(self, x: int, y: int, z: int, **kwargs) -> None:
+        """Show red hover text for an invalid craft position."""
+        self.hover_label["text"] = f"Cannot craft here ({x}, {y}, {-z})"
+        self.hover_label["text_fg"] = _sty.ERROR_COLOR
+
+    def _on_craft_hover_clear_hud(self, **kwargs) -> None:
+        """Clear the hover label when craft hover clears."""
+        self.hover_label["text"] = ""

@@ -76,6 +76,7 @@ class FakeGameState:
         self.game_over = False
         self.menu_open = False
         self.craft_mode_active = False
+        self.mana_system = None
 
 
 class FakeCore:

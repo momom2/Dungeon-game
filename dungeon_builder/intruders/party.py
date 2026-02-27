@@ -9,7 +9,9 @@ intruder with the right items can provide them.  There are no archetype-
 specific party aura mechanics; all support is through the equipment system.
 
 Dependencies: config, utils.rng, intruders.agent, intruders.archetypes
-Dependents: core.save_system, intruders.decision, tests/intruders/
+Dependents: core.save_system, intruders.decision, tests/intruders/,
+    tests/physics/test_water.py, tests/core/test_save_system.py,
+    tests/benchmarks/benchmark_performance.py
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from dungeon_builder.config import (
     MORALE_SUPPORT_TICK,
     MORALE_DRIFT_RATE,
     MORALE_ALLY_DEATH_PENALTY,
+    SUPPORT_AURA_SIGHT_THRESHOLD,
 )
 
 if TYPE_CHECKING:
@@ -356,16 +359,27 @@ class Party:
         """Update morale for all alive members each tick.
 
         - Leader alive bonus: +MORALE_LEADER_BONUS per tick
-        - Support archetype nearby: +MORALE_SUPPORT_TICK per tick
+        - Support aura: if a member with arcane_sight_range ≥ threshold
+          is alive, all members get +MORALE_SUPPORT_TICK per tick
         - Natural decay: drift toward MORALE_BASE
         """
         alive = self.alive_members
         leader = self.leader
 
+        # Support aura: stat-based (arcane_sight ≥ threshold = support role)
+        has_support = any(
+            m.archetype.arcane_sight_range >= SUPPORT_AURA_SIGHT_THRESHOLD
+            for m in alive
+        )
+
         for m in alive:
             # Leader alive bonus
             if leader is not None:
                 m.morale += MORALE_LEADER_BONUS
+
+            # Support aura bonus
+            if has_support:
+                m.morale += MORALE_SUPPORT_TICK
 
             # Natural drift toward MORALE_BASE
             if m.morale < MORALE_BASE:

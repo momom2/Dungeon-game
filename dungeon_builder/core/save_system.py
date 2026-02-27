@@ -11,10 +11,11 @@ Each save file is a zip archive containing:
 - parties.json: Party composition linked by intruder id
 - core.json: DungeonCore HP/position
 - intruder_ai.json: Spawn counters and flags
+- mana.json: Mana pool state (mana, max_mana, souls)
 
 Dependencies: config, intruders.personal_map, intruders.agent,
     intruders.archetypes, intruders.equipment, intruders.familiar,
-    intruders.party, building.build_system
+    intruders.party, building.build_system, dungeon_core.mana
 Dependents: main (wiring), tests/core/test_save_system.py
 """
 
@@ -384,6 +385,11 @@ class SaveData:
     next_party_id: int = 1
     spawning_enabled: bool = False
 
+    # ManaSystem
+    mana: float = 0.0
+    max_mana: float = 1000.0
+    souls: int = 0
+
 
 # ── Save ──────────────────────────────────────────────────────────────
 
@@ -510,6 +516,16 @@ class SaveSystem:
             }
             zf.writestr("intruder_ai.json", json.dumps(ai_data, indent=2))
 
+            # 10. Mana system
+            mana_system = game_state.mana_system
+            if mana_system is not None:
+                mana_data = {
+                    "mana": mana_system.mana,
+                    "max_mana": mana_system.max_mana,
+                    "souls": mana_system.souls,
+                }
+                zf.writestr("mana.json", json.dumps(mana_data, indent=2))
+
         logger.info("Game saved to %s", path)
 
     @staticmethod
@@ -602,6 +618,13 @@ class SaveSystem:
                 sd.next_intruder_id = ai.get("next_id", 1)
                 sd.next_party_id = ai.get("next_party_id", 1)
                 sd.spawning_enabled = ai.get("spawning_enabled", False)
+
+                # 10. Mana system (optional — old saves may not have it)
+                if "mana.json" in zf.namelist():
+                    mana = json.loads(zf.read("mana.json"))
+                    sd.mana = mana.get("mana", 0.0)
+                    sd.max_mana = mana.get("max_mana", 1000.0)
+                    sd.souls = mana.get("souls", 0)
 
             logger.info("Game loaded from %s (tick %d)", path, sd.tick_count)
             return sd
@@ -709,6 +732,14 @@ class SaveSystem:
         # Reset transient AI state
         intruder_ai._spawn_timer = 0
         intruder_ai._alarm_cooldowns = {}
+
+        # Mana system — restore pool and recount traps from grid
+        mana_system = game_state.mana_system
+        if mana_system is not None:
+            mana_system.mana = sd.mana
+            mana_system.max_mana = sd.max_mana
+            mana_system.souls = sd.souls
+            mana_system.recount_traps()
 
         logger.info("Save data applied (tick %d, %d intruders, %d parties)",
                      sd.tick_count, len(sd.intruders),

@@ -1,6 +1,7 @@
 """Dig queue and construction system.
 
-Dependencies: config, core.event_bus, core.game_state, world.voxel_grid
+Dependencies: config, core.event_bus, core.game_state, world.voxel_grid,
+    dungeon_core.mana (via mana_power_changed event)
 Dependents: main (wiring), core.game_state, core.save_system,
     rendering.voxel_renderer, tests/building/, tests/rendering/
 """
@@ -66,8 +67,11 @@ class BuildSystem:
         # O(1) position index — mirrors all three lists above.
         # Every add/remove to pending/queue/active MUST also update this set.
         self._dig_positions: set[tuple[int, int, int]] = set()
+        # Mana power flag — when False, active digs pause (no progress)
+        self._digs_powered: bool = True
 
         event_bus.subscribe("tick", self._on_tick)
+        event_bus.subscribe("mana_power_changed", self._on_mana_power_changed)
         event_bus.subscribe("voxel_left_clicked", self._on_voxel_left_clicked)
         event_bus.subscribe("claimed_territory_changed", self._check_pending_digs)
         # Pending check removed from dig_complete — claimed_territory_changed
@@ -178,10 +182,11 @@ class BuildSystem:
             job = self.dig_queue.pop(0)
             self.active_digs.append(job)
 
-        # Process active digs
+        # Process active digs (paused when mana depleted)
         completed: list[DigJob] = []
         for job in self.active_digs:
-            job.ticks_remaining -= 1
+            if self._digs_powered:
+                job.ticks_remaining -= 1
             if job.ticks_remaining <= 0:
                 # Mark material as loose instead of removing it
                 self.voxel_grid.set_loose(job.x, job.y, job.z, True)
@@ -460,6 +465,10 @@ class BuildSystem:
         if self.voxel_grid.get(x, y, z) == VOXEL_AIR:
             return
         ms.pick_up(x, y, z)
+
+    def _on_mana_power_changed(self, digs_powered: bool, **kw) -> None:
+        """Update dig power state from ManaSystem."""
+        self._digs_powered = digs_powered
 
     # ── Internal helpers ──────────────────────────────────────────────
 

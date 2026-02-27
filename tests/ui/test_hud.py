@@ -240,7 +240,52 @@ class TestHoverModeInfo:
         sig = inspect.signature(HUD._on_render_mode_changed)
         assert "mode" in sig.parameters
 
-    def test_infused_lava_removed_from_vtype_names(self):
-        """Infused Lava (type 92) should NOT be in _VTYPE_NAMES (replaced by mana_crystals)."""
+    def test_enchanted_door_in_vtype_names(self):
+        """Enchanted Door (type 92) should be in _VTYPE_NAMES."""
         from dungeon_builder.ui.hud import _VTYPE_NAMES
-        assert 92 not in _VTYPE_NAMES
+        assert _VTYPE_NAMES.get(92) == "Enchanted Door"
+
+    def test_enchanted_floodgate_in_vtype_names(self):
+        """Enchanted Floodgate (type 93) should be in _VTYPE_NAMES."""
+        from dungeon_builder.ui.hud import _VTYPE_NAMES
+        assert _VTYPE_NAMES.get(93) == "Enchanted Floodgate"
+
+
+# ===========================================================================
+# Craft-mode HUD methods (from crafting UI improvements)
+# ===========================================================================
+
+
+class TestCraftModeHUD:
+    """HUD has craft-mode aware hover labels and remaining count display."""
+
+    def test_craft_remaining_handler_exists(self):
+        from dungeon_builder.ui.hud import HUD
+        assert hasattr(HUD, "_on_craft_remaining_updated")
+        assert callable(getattr(HUD, "_on_craft_remaining_updated"))
+
+    def test_craft_hover_valid_handler_exists(self):
+        from dungeon_builder.ui.hud import HUD
+        assert hasattr(HUD, "_on_craft_hover_valid")
+        assert callable(getattr(HUD, "_on_craft_hover_valid"))
+
+    def test_craft_hover_invalid_handler_exists(self):
+        from dungeon_builder.ui.hud import HUD
+        assert hasattr(HUD, "_on_craft_hover_invalid")
+        assert callable(getattr(HUD, "_on_craft_hover_invalid"))
+
+    def test_craft_hover_clear_hud_handler_exists(self):
+        from dungeon_builder.ui.hud import HUD
+        assert hasattr(HUD, "_on_craft_hover_clear_hud")
+        assert callable(getattr(HUD, "_on_craft_hover_clear_hud"))
+
+    def test_update_craft_tool_label_exists(self):
+        from dungeon_builder.ui.hud import HUD
+        assert hasattr(HUD, "_update_craft_tool_label")
+        assert callable(getattr(HUD, "_update_craft_tool_label"))
+
+    def test_craft_status_color_in_style(self):
+        from dungeon_builder.ui.style import CRAFT_STATUS_COLOR
+        assert len(CRAFT_STATUS_COLOR) == 4
+        for c in CRAFT_STATUS_COLOR:
+            assert 0.0 <= c <= 1.0

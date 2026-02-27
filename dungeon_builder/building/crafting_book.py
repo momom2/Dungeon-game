@@ -5,6 +5,7 @@ Each recipe has:
   - description: what happens
   - check_fn(grid, x, y, z, held_type) -> bool: can the craft happen here?
   - craft_fn(grid, x, y, z, held_type, event_bus) -> bool: execute the craft
+  - mana_cost: one-time mana cost when using regular metal instead of enchanted
 
 Dependencies: config, core.event_bus, world.voxel_grid
 Dependents: building.crafting_journal, building.crafting_system,
@@ -55,6 +56,8 @@ from dungeon_builder.config import (
     VOXEL_PUMP,
     VOXEL_STEAM_VENT,
     VOXEL_WATER,
+    VOXEL_ENCHANTED_DOOR,
+    VOXEL_ENCHANTED_FLOODGATE,
     METAL_NONE,
     METAL_IRON,
     METAL_COPPER,
@@ -62,6 +65,7 @@ from dungeon_builder.config import (
     ENCHANTED_OFFSET,
     HELD_TO_METAL,
     ORE_TO_METAL,
+    MANA_CRAFT_COST,
     PIPEABLE_STONE_TYPES,
     base_metal_of,
 )
@@ -96,6 +100,8 @@ class CraftingRecipe:
     required_inputs: frozenset[int]   # Voxel types the player must hold (any match)
     check_fn: Callable[..., bool]
     craft_fn: Callable[..., bool]
+    output_vtype: int = 0             # Output block type (0 = variable/unknown)
+    mana_cost: int = 0                # >0 = enchanted recipe, mana cost for regular-metal craft
 
 
 # ---------------------------------------------------------------------------
@@ -375,8 +381,8 @@ def _craft_stairs(
 
 
 def _check_door(grid: VoxelGrid, x: int, y: int, z: int, held_type: int) -> bool:
-    """Enchanted metal on air between 2 opposite walls."""
-    if held_type != VOXEL_ENCHANTED_METAL:
+    """Any metal ingot on air between 2 opposite walls."""
+    if held_type not in (VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT):
         return False
     if grid.get(x, y, z) != VOXEL_AIR:
         return False
@@ -496,8 +502,8 @@ def _has_adjacent_water(grid: VoxelGrid, x: int, y: int, z: int) -> bool:
 # ── Gold Bait (78) ────────────────────────────────────────────────────
 
 def _check_gold_bait(grid: VoxelGrid, x: int, y: int, z: int, held_type: int) -> bool:
-    """Enchanted gold ingot on air with solid below + ≥1 wall."""
-    if held_type != VOXEL_ENCHANTED_METAL:
+    """Enchanted metal or gold ingot on air with solid below + ≥1 wall."""
+    if held_type not in (VOXEL_ENCHANTED_METAL, VOXEL_GOLD_INGOT):
         return False
     if grid.get(x, y, z) != VOXEL_AIR:
         return False
@@ -514,7 +520,12 @@ def _craft_gold_bait(
     grid: VoxelGrid, x: int, y: int, z: int, held_type: int, event_bus: EventBus,
     held_metal: int = METAL_NONE,
 ) -> bool:
-    metal = held_metal if held_metal != METAL_NONE else HELD_TO_METAL.get(held_type, METAL_GOLD) | ENCHANTED_OFFSET
+    if held_metal != METAL_NONE:
+        metal = held_metal
+    elif held_type == VOXEL_ENCHANTED_METAL:
+        metal = METAL_GOLD | ENCHANTED_OFFSET
+    else:
+        metal = HELD_TO_METAL.get(held_type, METAL_GOLD)
     # Gold bait requires gold — validate base metal is gold
     if base_metal_of(metal) != METAL_GOLD:
         return False
@@ -526,8 +537,8 @@ def _craft_gold_bait(
 # ── Heat Beacon (79) ──────────────────────────────────────────────────
 
 def _check_heat_beacon(grid: VoxelGrid, x: int, y: int, z: int, held_type: int) -> bool:
-    """Copper ingot on stone with temperature > 200."""
-    if held_type != VOXEL_COPPER_INGOT:
+    """Any metal ingot (enchanted or regular) on stone with temperature > 200."""
+    if held_type not in (VOXEL_ENCHANTED_METAL, VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT):
         return False
     if grid.get(x, y, z) != VOXEL_STONE:
         return False
@@ -538,7 +549,12 @@ def _craft_heat_beacon(
     grid: VoxelGrid, x: int, y: int, z: int, held_type: int, event_bus: EventBus,
     held_metal: int = METAL_NONE,
 ) -> bool:
-    metal = held_metal if held_metal != METAL_NONE else METAL_COPPER
+    if held_metal != METAL_NONE:
+        metal = held_metal
+    elif held_type == VOXEL_ENCHANTED_METAL:
+        metal = HELD_TO_METAL.get(held_type, METAL_COPPER) | ENCHANTED_OFFSET
+    else:
+        metal = HELD_TO_METAL.get(held_type, METAL_COPPER)
     grid.set(x, y, z, VOXEL_HEAT_BEACON, event_bus=event_bus)
     grid.set_metal_type(x, y, z, metal)
     return True
@@ -547,8 +563,8 @@ def _craft_heat_beacon(
 # ── Pressure Plate (80) ──────────────────────────────────────────────
 
 def _check_pressure_plate(grid: VoxelGrid, x: int, y: int, z: int, held_type: int) -> bool:
-    """Any enchanted ingot on stone with air above."""
-    if held_type != VOXEL_ENCHANTED_METAL:
+    """Any metal ingot (enchanted or regular) on stone with air above."""
+    if held_type not in (VOXEL_ENCHANTED_METAL, VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT):
         return False
     if grid.get(x, y, z) != VOXEL_STONE:
         return False
@@ -572,8 +588,8 @@ def _craft_pressure_plate(
 # ── Iron Bars (81) ───────────────────────────────────────────────────
 
 def _check_iron_bars(grid: VoxelGrid, x: int, y: int, z: int, held_type: int) -> bool:
-    """Any enchanted ingot on air with 2 opposite walls."""
-    if held_type != VOXEL_ENCHANTED_METAL:
+    """Any metal ingot on air with 2 opposite walls."""
+    if held_type not in (VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT):
         return False
     if grid.get(x, y, z) != VOXEL_AIR:
         return False
@@ -584,7 +600,7 @@ def _craft_iron_bars(
     grid: VoxelGrid, x: int, y: int, z: int, held_type: int, event_bus: EventBus,
     held_metal: int = METAL_NONE,
 ) -> bool:
-    metal = held_metal if held_metal != METAL_NONE else HELD_TO_METAL.get(held_type, METAL_IRON) | ENCHANTED_OFFSET
+    metal = held_metal if held_metal != METAL_NONE else HELD_TO_METAL.get(held_type, METAL_IRON)
     grid.set(x, y, z, VOXEL_IRON_BARS, event_bus=event_bus)
     grid.set_metal_type(x, y, z, metal)
     return True
@@ -593,8 +609,8 @@ def _craft_iron_bars(
 # ── Floodgate (82) ───────────────────────────────────────────────────
 
 def _check_floodgate(grid: VoxelGrid, x: int, y: int, z: int, held_type: int) -> bool:
-    """Any enchanted ingot on stone with adjacent water."""
-    if held_type != VOXEL_ENCHANTED_METAL:
+    """Any metal ingot on stone with adjacent water."""
+    if held_type not in (VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT):
         return False
     if grid.get(x, y, z) != VOXEL_STONE:
         return False
@@ -605,7 +621,7 @@ def _craft_floodgate(
     grid: VoxelGrid, x: int, y: int, z: int, held_type: int, event_bus: EventBus,
     held_metal: int = METAL_NONE,
 ) -> bool:
-    metal = held_metal if held_metal != METAL_NONE else HELD_TO_METAL.get(held_type, METAL_IRON) | ENCHANTED_OFFSET
+    metal = held_metal if held_metal != METAL_NONE else HELD_TO_METAL.get(held_type, METAL_IRON)
     grid.set(x, y, z, VOXEL_FLOODGATE, event_bus=event_bus)
     grid.set_metal_type(x, y, z, metal)
     # Floodgate starts closed (state=1)
@@ -616,8 +632,8 @@ def _craft_floodgate(
 # ── Alarm Bell (83) ──────────────────────────────────────────────────
 
 def _check_alarm_bell(grid: VoxelGrid, x: int, y: int, z: int, held_type: int) -> bool:
-    """Any enchanted ingot on air with solid below + ≥1 wall."""
-    if held_type != VOXEL_ENCHANTED_METAL:
+    """Any metal ingot (enchanted or regular) on air with solid below + ≥1 wall."""
+    if held_type not in (VOXEL_ENCHANTED_METAL, VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT):
         return False
     if grid.get(x, y, z) != VOXEL_AIR:
         return False
@@ -733,6 +749,66 @@ def _craft_steam_vent(
 
 
 # ---------------------------------------------------------------------------
+# Enchanted functional block recipe implementations (IDs 92-93)
+# ---------------------------------------------------------------------------
+
+# ── Enchanted Door (92) ─────────────────────────────────────────────
+
+def _check_enchanted_door(grid: VoxelGrid, x: int, y: int, z: int, held_type: int) -> bool:
+    """Any metal ingot (enchanted or regular) on air between 2 opposite walls."""
+    if held_type not in (VOXEL_ENCHANTED_METAL, VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT):
+        return False
+    if grid.get(x, y, z) != VOXEL_AIR:
+        return False
+    return _has_opposite_walls(grid, x, y, z)
+
+
+def _craft_enchanted_door(
+    grid: VoxelGrid, x: int, y: int, z: int, held_type: int, event_bus: EventBus,
+    held_metal: int = METAL_NONE,
+) -> bool:
+    if held_metal != METAL_NONE:
+        metal = held_metal
+    elif held_type == VOXEL_ENCHANTED_METAL:
+        metal = HELD_TO_METAL.get(held_type, METAL_IRON) | ENCHANTED_OFFSET
+    else:
+        metal = HELD_TO_METAL.get(held_type, METAL_IRON)
+    grid.set(x, y, z, VOXEL_ENCHANTED_DOOR, event_bus=event_bus)
+    grid.set_metal_type(x, y, z, metal)
+    # Enchanted doors start closed (state=1)
+    grid.set_block_state(x, y, z, 1)
+    return True
+
+
+# ── Enchanted Floodgate (93) ────────────────────────────────────────
+
+def _check_enchanted_floodgate(grid: VoxelGrid, x: int, y: int, z: int, held_type: int) -> bool:
+    """Any metal ingot (enchanted or regular) on stone with adjacent water."""
+    if held_type not in (VOXEL_ENCHANTED_METAL, VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT):
+        return False
+    if grid.get(x, y, z) != VOXEL_STONE:
+        return False
+    return _has_adjacent_water(grid, x, y, z)
+
+
+def _craft_enchanted_floodgate(
+    grid: VoxelGrid, x: int, y: int, z: int, held_type: int, event_bus: EventBus,
+    held_metal: int = METAL_NONE,
+) -> bool:
+    if held_metal != METAL_NONE:
+        metal = held_metal
+    elif held_type == VOXEL_ENCHANTED_METAL:
+        metal = HELD_TO_METAL.get(held_type, METAL_IRON) | ENCHANTED_OFFSET
+    else:
+        metal = HELD_TO_METAL.get(held_type, METAL_IRON)
+    grid.set(x, y, z, VOXEL_ENCHANTED_FLOODGATE, event_bus=event_bus)
+    grid.set_metal_type(x, y, z, metal)
+    # Enchanted floodgate starts closed (state=1)
+    grid.set_block_state(x, y, z, 1)
+    return True
+
+
+# ---------------------------------------------------------------------------
 # The crafting book
 # ---------------------------------------------------------------------------
 
@@ -747,6 +823,7 @@ class CraftingBook:
                 frozenset({VOXEL_MARBLE}),
                 _check_marble_wall,
                 _craft_marble_wall,
+                output_vtype=VOXEL_MARBLE,
             ),
             CraftingRecipe(
                 "Ore Smelting",
@@ -754,6 +831,7 @@ class CraftingBook:
                 frozenset({VOXEL_IRON_ORE, VOXEL_COPPER_ORE, VOXEL_GOLD_ORE}),
                 _check_ore_smelting,
                 _craft_ore_smelting,
+                output_vtype=0,  # Variable: depends on ore type
             ),
             CraftingRecipe(
                 "Obsidian Forge",
@@ -761,6 +839,7 @@ class CraftingBook:
                 frozenset({VOXEL_BASALT}),
                 _check_obsidian_forge,
                 _craft_obsidian_forge,
+                output_vtype=VOXEL_OBSIDIAN,
             ),
             CraftingRecipe(
                 "Mana Infusion",
@@ -768,6 +847,7 @@ class CraftingBook:
                 frozenset({VOXEL_MANA_CRYSTAL}),
                 _check_mana_infusion,
                 _craft_mana_infusion,
+                output_vtype=VOXEL_ENCHANTED_METAL,
             ),
             CraftingRecipe(
                 "Stone Brick",
@@ -775,6 +855,7 @@ class CraftingBook:
                 frozenset({VOXEL_LIMESTONE}),
                 _check_stone_brick,
                 _craft_stone_brick,
+                output_vtype=VOXEL_LIMESTONE,
             ),
             CraftingRecipe(
                 "Glass",
@@ -782,6 +863,7 @@ class CraftingBook:
                 frozenset({VOXEL_SANDSTONE}),
                 _check_glass,
                 _craft_glass,
+                output_vtype=VOXEL_CHALK,
             ),
             CraftingRecipe(
                 "Granite Pillar",
@@ -789,6 +871,7 @@ class CraftingBook:
                 frozenset({VOXEL_GRANITE}),
                 _check_granite_pillar,
                 _craft_granite_pillar,
+                output_vtype=VOXEL_GRANITE,
             ),
             # --- Functional block recipes ---
             CraftingRecipe(
@@ -797,6 +880,7 @@ class CraftingBook:
                 frozenset({VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT}),
                 _check_reinforced_wall,
                 _craft_reinforced_wall,
+                output_vtype=VOXEL_REINFORCED_WALL,
             ),
             CraftingRecipe(
                 "Treasure",
@@ -804,6 +888,7 @@ class CraftingBook:
                 frozenset({VOXEL_GOLD_INGOT}),
                 _check_treasure,
                 _craft_treasure,
+                output_vtype=VOXEL_TREASURE,
             ),
             CraftingRecipe(
                 "Slope",
@@ -811,6 +896,7 @@ class CraftingBook:
                 frozenset({VOXEL_STONE}),
                 _check_slope,
                 _craft_slope,
+                output_vtype=VOXEL_SLOPE,
             ),
             CraftingRecipe(
                 "Stairs",
@@ -818,13 +904,15 @@ class CraftingBook:
                 frozenset({VOXEL_STONE}),
                 _check_stairs,
                 _craft_stairs,
+                output_vtype=VOXEL_STAIRS,
             ),
             CraftingRecipe(
                 "Door",
-                "Place enchanted metal between two opposite walls to build a door",
-                frozenset({VOXEL_ENCHANTED_METAL}),
+                "Place any metal ingot between two opposite walls to build a door",
+                frozenset({VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT}),
                 _check_door,
                 _craft_door,
+                output_vtype=VOXEL_DOOR,
             ),
             CraftingRecipe(
                 "Spike Trap",
@@ -832,6 +920,7 @@ class CraftingBook:
                 frozenset({VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT}),
                 _check_spike_trap,
                 _craft_spike_trap,
+                output_vtype=VOXEL_SPIKE,
             ),
             CraftingRecipe(
                 "Tarp",
@@ -839,6 +928,7 @@ class CraftingBook:
                 frozenset({VOXEL_DIRT}),
                 _check_tarp,
                 _craft_tarp,
+                output_vtype=VOXEL_TARP,
             ),
             CraftingRecipe(
                 "Rolling Stone",
@@ -846,49 +936,78 @@ class CraftingBook:
                 frozenset({VOXEL_GRANITE}),
                 _check_rolling_stone,
                 _craft_rolling_stone,
+                output_vtype=VOXEL_ROLLING_STONE,
             ),
             # --- New functional block recipes (Phase 2) ---
             CraftingRecipe(
                 "Gold Bait",
-                "Place enchanted gold in air with floor + wall to lure greedy intruders",
-                frozenset({VOXEL_ENCHANTED_METAL}),
+                "Place enchanted or gold ingot in air with floor + wall to lure intruders",
+                frozenset({VOXEL_ENCHANTED_METAL, VOXEL_GOLD_INGOT}),
                 _check_gold_bait,
                 _craft_gold_bait,
+                output_vtype=VOXEL_GOLD_BAIT,
+                mana_cost=MANA_CRAFT_COST[VOXEL_GOLD_BAIT],
             ),
             CraftingRecipe(
                 "Heat Beacon",
-                "Apply copper ingot to hot stone (>200°) to create a heat source",
-                frozenset({VOXEL_COPPER_INGOT}),
+                "Apply enchanted or any metal ingot to hot stone (>200°) for heat source",
+                frozenset({VOXEL_ENCHANTED_METAL, VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT}),
                 _check_heat_beacon,
                 _craft_heat_beacon,
+                output_vtype=VOXEL_HEAT_BEACON,
+                mana_cost=MANA_CRAFT_COST[VOXEL_HEAT_BEACON],
             ),
             CraftingRecipe(
                 "Pressure Plate",
-                "Apply enchanted ingot to stone with air above to set a trigger",
-                frozenset({VOXEL_ENCHANTED_METAL}),
+                "Apply any metal ingot to stone with air above to set a trigger",
+                frozenset({VOXEL_ENCHANTED_METAL, VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT}),
                 _check_pressure_plate,
                 _craft_pressure_plate,
+                output_vtype=VOXEL_PRESSURE_PLATE,
+                mana_cost=MANA_CRAFT_COST[VOXEL_PRESSURE_PLATE],
             ),
             CraftingRecipe(
                 "Iron Bars",
-                "Place enchanted ingot between opposite walls to create bars",
-                frozenset({VOXEL_ENCHANTED_METAL}),
+                "Place any metal ingot between opposite walls to create bars",
+                frozenset({VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT}),
                 _check_iron_bars,
                 _craft_iron_bars,
+                output_vtype=VOXEL_IRON_BARS,
             ),
             CraftingRecipe(
                 "Floodgate",
-                "Apply enchanted ingot to stone near water to create a floodgate",
-                frozenset({VOXEL_ENCHANTED_METAL}),
+                "Apply any metal ingot to stone near water to create a floodgate",
+                frozenset({VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT}),
                 _check_floodgate,
                 _craft_floodgate,
+                output_vtype=VOXEL_FLOODGATE,
             ),
             CraftingRecipe(
                 "Alarm Bell",
-                "Place enchanted ingot in air with floor + wall to detect intruders",
-                frozenset({VOXEL_ENCHANTED_METAL}),
+                "Place any metal ingot in air with floor + wall to detect intruders",
+                frozenset({VOXEL_ENCHANTED_METAL, VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT}),
                 _check_alarm_bell,
                 _craft_alarm_bell,
+                output_vtype=VOXEL_ALARM_BELL,
+                mana_cost=MANA_CRAFT_COST[VOXEL_ALARM_BELL],
+            ),
+            CraftingRecipe(
+                "Enchanted Door",
+                "Place any metal ingot between walls to build a signal-responsive door",
+                frozenset({VOXEL_ENCHANTED_METAL, VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT}),
+                _check_enchanted_door,
+                _craft_enchanted_door,
+                output_vtype=VOXEL_ENCHANTED_DOOR,
+                mana_cost=MANA_CRAFT_COST[VOXEL_ENCHANTED_DOOR],
+            ),
+            CraftingRecipe(
+                "Enchanted Floodgate",
+                "Apply any metal ingot to stone near water for signal-responsive gate",
+                frozenset({VOXEL_ENCHANTED_METAL, VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT}),
+                _check_enchanted_floodgate,
+                _craft_enchanted_floodgate,
+                output_vtype=VOXEL_ENCHANTED_FLOODGATE,
+                mana_cost=MANA_CRAFT_COST[VOXEL_ENCHANTED_FLOODGATE],
             ),
             CraftingRecipe(
                 "Fragile Floor",
@@ -896,6 +1015,7 @@ class CraftingBook:
                 frozenset({VOXEL_CHALK}),
                 _check_fragile_floor,
                 _craft_fragile_floor,
+                output_vtype=VOXEL_FRAGILE_FLOOR,
             ),
             CraftingRecipe(
                 "Pipe",
@@ -903,6 +1023,7 @@ class CraftingBook:
                 frozenset({VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT}),
                 _check_pipe,
                 _craft_pipe,
+                output_vtype=VOXEL_PIPE,
             ),
             CraftingRecipe(
                 "Pump",
@@ -910,6 +1031,7 @@ class CraftingBook:
                 frozenset({VOXEL_IRON_INGOT, VOXEL_COPPER_INGOT, VOXEL_GOLD_INGOT}),
                 _check_pump,
                 _craft_pump,
+                output_vtype=VOXEL_PUMP,
             ),
             CraftingRecipe(
                 "Steam Vent",
@@ -917,6 +1039,7 @@ class CraftingBook:
                 frozenset({VOXEL_OBSIDIAN}),
                 _check_steam_vent,
                 _craft_steam_vent,
+                output_vtype=VOXEL_STEAM_VENT,
             ),
         ]
 

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from dungeon_builder.building.build_system import BuildSystem
     from dungeon_builder.building.move_system import MoveSystem
     from dungeon_builder.world.pathfinding import AStarPathfinder
+    from dungeon_builder.dungeon_core.mana import ManaSystem
 
 
 class GameState:
@@ -37,6 +38,7 @@ class GameState:
         self.move_system: MoveSystem | None = None
         self.pathfinder: AStarPathfinder | None = None
         self.keybinding_registry: KeybindingRegistry | None = None
+        self.mana_system: ManaSystem | None = None
 
         # Current build mode for mouse interaction
         self.build_mode: str = "dig"

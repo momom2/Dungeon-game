@@ -12,6 +12,7 @@ from dungeon_builder.config import (
     VOXEL_STONE,
     VOXEL_DOOR,
     VOXEL_SPIKE,
+    VOXEL_IRON_INGOT,
     VOXEL_ENCHANTED_METAL,
     DEFAULT_SEED,
 )
@@ -150,7 +151,7 @@ class TestDoorCraftState:
         bus, grid, ms, cs = _setup()
         grid.grid[3, 4, 4] = VOXEL_STONE
         grid.grid[5, 4, 4] = VOXEL_STONE
-        ms.held_materials = {VOXEL_ENCHANTED_METAL: 1}
+        ms.held_materials = {VOXEL_IRON_INGOT: 1}
 
         cs._current_z = 4
         bus.publish("craft_recipe_selected", recipe_name="Door")
