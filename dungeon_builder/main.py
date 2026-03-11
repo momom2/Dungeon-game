@@ -228,10 +228,8 @@ class DungeonApp(ShowBase):
         # Clear any dirty chunks from stabilization (renderer not built yet)
         voxel_grid.pop_dirty_chunks()
         # Reset skip-if-unchanged snapshots so first real tick doesn't skip
-        gravity_physics._last_connectivity_grid = voxel_grid.grid.copy()
-        gravity_physics._last_connectivity_loose = voxel_grid.loose.copy()
-        structural_physics._last_structural_grid = voxel_grid.grid.copy()
-        structural_physics._last_structural_loose = voxel_grid.loose.copy()
+        gravity_physics.reset_snapshots()
+        structural_physics.reset_snapshots()
 
         # ── Lighting ──
         self._setup_lighting()
@@ -433,7 +431,7 @@ class DungeonApp(ShowBase):
         for dx in (-2, 2):
             for dy in (-2, 2):
                 x, y = CORE_X + dx, CORE_Y + dy
-                for z in (CORE_Z, CORE_Z - 1):
+                for z in (CORE_Z + 1, CORE_Z, CORE_Z - 1, CORE_Z - 2):
                     if grid.in_bounds(x, y, z):
                         grid.grid[x, y, z] = VOXEL_MARBLE
 
@@ -486,8 +484,8 @@ class DungeonApp(ShowBase):
 
         # Also clear surface around entrance for spawning
         for dx in range(-2, 4):
-            for dy in range(4):
-                x, y = shaft_x + dx, dy
+            for dy in range(-2, 4):
+                x, y = shaft_x + dx, shaft_y + dy
                 if grid.in_bounds(x, y, SURFACE_Z):
                     grid.grid[x, y, SURFACE_Z] = VOXEL_AIR
 

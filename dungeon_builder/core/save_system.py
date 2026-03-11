@@ -42,6 +42,7 @@ _GRID_ARRAY_NAMES = (
     "stress_ratio", "fall_distance", "water_level", "thermal_fatigue",
     "block_state", "metal_type", "claimed", "visible",
     "water_vx", "water_vy", "water_vz",
+    "lava_level", "mana_crystals", "water_pressure",
 )
 
 

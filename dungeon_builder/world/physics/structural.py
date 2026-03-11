@@ -115,6 +115,16 @@ class StructuralIntegrityPhysics:
         event_bus.subscribe("blocks_fell", self._on_blocks_fell)
         event_bus.subscribe("blocks_spread", self._on_blocks_fell)
 
+    def reset_snapshots(self) -> None:
+        """Reset skip-if-unchanged snapshots to the current grid state.
+
+        Call after bulk modifications (e.g. terrain stabilization) so the
+        first real tick doesn't erroneously skip its structural check.
+        """
+        grid = self._grid
+        self._last_structural_grid = grid.grid.copy()
+        self._last_structural_loose = grid.loose.copy()
+
     def _on_blocks_fell(self, **kw) -> None:
         """Note that blocks are actively falling; defer structural checks."""
         self._falling_active = True

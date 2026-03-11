@@ -95,6 +95,16 @@ class GravityPhysics:
 
         event_bus.subscribe("tick", self._on_tick)
 
+    def reset_snapshots(self) -> None:
+        """Reset skip-if-unchanged snapshots to the current grid state.
+
+        Call after bulk modifications (e.g. terrain stabilization) so the
+        first real tick doesn't erroneously skip its connectivity check.
+        """
+        grid = self._grid
+        self._last_connectivity_grid = grid.grid.copy()
+        self._last_connectivity_loose = grid.loose.copy()
+
     def _on_tick(self, tick: int, **kw) -> None:
         if tick % GRAVITY_TICK_INTERVAL == 0:
             self._process_falling()
