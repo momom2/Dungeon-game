@@ -1,7 +1,7 @@
 """Individual intruder data model and state machine.
 
 Dependencies: config, intruders.archetypes, intruders.equipment,
-    intruders.familiar, intruders.personal_map
+    intruders.familiar, intruders.sprite, intruders.personal_map
 Dependents: core.save_system, intruders.decision, intruders.interactions,
     intruders.knowledge_archive, intruders.party, intruders.familiar,
     rendering.intruder_renderer, tests/intruders/,
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from dungeon_builder.intruders.equipment import Equipment, ItemEffect
     from dungeon_builder.intruders.familiar import Familiar
     from dungeon_builder.intruders.personal_map import PersonalMap
+    from dungeon_builder.intruders.sprite import Sprite
 
 
 class IntruderState(Enum):
@@ -94,12 +95,15 @@ class Intruder:
         "equipment",
         # Familiars (Mole Tamer only)
         "familiars",
+        # Sprites (Eidolon only)
+        "sprites",
+        "sprite_summon_cooldown",
         # Supplies (constantly deplete)
         "food",
         "water",
         # Exploration data (all intruders, degree varies by archetype)
         "maps_collected",
-        # Eidolon entertainment meter (stub)
+        # Eidolon entertainment meter
         "entertainment",
     )
 
@@ -129,7 +133,7 @@ class Intruder:
         # Level stat scaling (applied to mutable instance fields, not frozen archetype)
         self.level: int = level
         self.status: IntruderStatus = status if status is not None else _IS.GRUNT
-        hp_mult = 1.0 + (level - 1) * _cfg.LEVEL_HP_SCALE
+        hp_mult = (1.0 + (level - 1) * _cfg.LEVEL_HP_SCALE) * _cfg.INTRUDER_HP_MULTIPLIER
         self.hp = int(archetype.hp * hp_mult)
         self.max_hp = self.hp
         self.shield_hp: int = 0
@@ -180,7 +184,11 @@ class Intruder:
         # Exploration tracking
         self.maps_collected: int = 0
 
-        # Eidolon entertainment (stub)
+        # Sprites (empty list for non-Eidolons)
+        self.sprites: list[Sprite] = []
+        self.sprite_summon_cooldown: int = 0
+
+        # Eidolon entertainment
         self.entertainment: float = 1.0
 
     # ── Convenience properties ──────────────────────────────────────
@@ -203,8 +211,8 @@ class Intruder:
 
     @property
     def effective_damage(self) -> int:
-        # Level scaling applied to base archetype damage
-        damage_mult = 1.0 + (self.level - 1) * _cfg.LEVEL_DAMAGE_SCALE
+        # Level scaling + global multiplier applied to base archetype damage
+        damage_mult = (1.0 + (self.level - 1) * _cfg.LEVEL_DAMAGE_SCALE) * _cfg.INTRUDER_DAMAGE_MULTIPLIER
         base = int(self.archetype.damage * damage_mult)
         # Equipment damage boost
         from dungeon_builder.intruders.equipment import ItemEffect as _IE

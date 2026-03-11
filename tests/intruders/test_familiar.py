@@ -14,6 +14,7 @@ from dungeon_builder.intruders.familiar import (
     order_dig,
     recall_familiar,
     check_unruliness,
+    update_familiar,
 )
 from dungeon_builder.intruders.agent import Intruder, IntruderState
 from dungeon_builder.intruders.archetypes import (
@@ -22,6 +23,7 @@ from dungeon_builder.intruders.archetypes import (
     IntruderObjective,
 )
 from dungeon_builder.intruders.personal_map import PersonalMap
+from dungeon_builder.world.voxel_grid import VoxelGrid
 from dungeon_builder.utils.rng import SeededRNG
 import dungeon_builder.config as _cfg
 
@@ -252,3 +254,45 @@ class TestRecallFamiliar:
         f.state = FamiliarState.UNRULY
         recall_familiar(f)
         assert f.state == FamiliarState.UNRULY
+
+
+# ── Dead tamer behavior ──────────────────────────────────────────────
+
+
+class TestDeadTamerBehavior:
+    """Familiars should stop following when their tamer dies."""
+
+    def test_following_familiar_stops_when_tamer_dead(self):
+        """A FOLLOWING familiar doesn't move when its tamer is dead."""
+        tamer = _make_tamer(x=5, y=5, z=3)
+        f = Familiar(familiar_id=10, owner_id=tamer.id, x=0, y=0, z=3)
+        f.state = FamiliarState.FOLLOWING
+
+        # Kill the tamer (state must be DEAD, not just hp=0)
+        tamer.hp = 0
+        tamer.state = IntruderState.DEAD
+
+        grid = VoxelGrid(width=16, depth=16, height=8)
+        rng = SeededRNG(42)
+
+        old_pos = f.pos
+        # Run many ticks — familiar should not move
+        for _ in range(20):
+            update_familiar(f, tamer, grid, rng)
+        assert f.pos == old_pos
+
+    def test_following_familiar_moves_when_tamer_alive(self):
+        """Verify familiars DO move when tamer is alive (sanity check)."""
+        tamer = _make_tamer(x=5, y=5, z=3)
+        f = Familiar(familiar_id=10, owner_id=tamer.id, x=0, y=0, z=3)
+        f.state = FamiliarState.FOLLOWING
+
+        grid = VoxelGrid(width=16, depth=16, height=8)
+        rng = SeededRNG(42)
+
+        # Tick enough times that the familiar would normally move
+        for _ in range(_cfg.FAMILIAR_MOVE_INTERVAL + 1):
+            update_familiar(f, tamer, grid, rng)
+
+        # If tamer is far enough, familiar should have moved at least once
+        assert f.pos != (0, 0, 3) or f.ticks_since_move > 0

@@ -20,6 +20,7 @@ from dungeon_builder.building.crafting_book import (
     NEIGHBORS_6,
     _has_opposite_walls,
 )
+from dungeon_builder.building.craft_cost import RecipeIngredient
 from prototype.config import VOXEL_ARROW_TRAP
 
 if TYPE_CHECKING:
@@ -91,20 +92,20 @@ class PrototypeCraftingBook(CraftingBook):
             CraftingRecipe(
                 "Arrow Trap",
                 "Apply stone to a stone block with exposed face to create a trap",
-                frozenset({VOXEL_STONE}),
+                [RecipeIngredient(VOXEL_STONE)],
+                0,
                 _check_arrow_trap,
                 _craft_arrow_trap,
                 output_vtype=VOXEL_ARROW_TRAP,
-                mana_cost=0,
             ),
             CraftingRecipe(
                 "Door",
                 "Place stone between two opposite walls to build a door",
-                frozenset({VOXEL_STONE}),
+                [RecipeIngredient(VOXEL_STONE)],
+                0,
                 _check_door,
                 _craft_door,
                 output_vtype=VOXEL_DOOR,
-                mana_cost=0,
             ),
         ]
         self._by_name: dict[str, CraftingRecipe] = {

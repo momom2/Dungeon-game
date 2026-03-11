@@ -105,6 +105,8 @@ class TestManaDrains:
         grid.set(5, 5, 0, VOXEL_PRESSURE_PLATE)
         eb.publish("voxel_changed", x=5, y=5, z=0,
                     old_type=VOXEL_AIR, new_type=VOXEL_PRESSURE_PLATE)
+        # Set idle charge mode so capacitance charging doesn't skew the test
+        ms._charge_mode[(5, 5, 0)] = "idle"
         eb.publish("tick", tick=1)
         upkeep_per_tick = MANA_UPKEEP_PER_SECOND[VOXEL_PRESSURE_PLATE] / TICKS_PER_SECOND
         expected = 100.0 + MANA_GENERATION_PER_TICK - upkeep_per_tick

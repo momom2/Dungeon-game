@@ -185,3 +185,20 @@ CRAFT_HOVER_VALID_COLOR = (0.2, 0.9, 0.3, 0.85)   # Green wireframe on valid pos
 CRAFT_GHOST_OPACITY = 0.40                          # Semi-transparent ghost preview
 CRAFT_FLASH_DURATION = 0.3                          # Seconds for placement flash
 CRAFT_FLASH_COLOR = (0.9, 1.0, 0.9, 0.8)           # Bright white-green pulse
+CRAFT_RADIUS_COLOR = (0.9, 0.6, 0.2, 0.45)         # Orange wireframe for effect radius
+
+# ── Connection visualization ─────────────────────────────────────────
+
+RENDER_MODE_CONNECTIONS = "connections"
+
+CONNECTION_COLOR_TRIGGER = (1.0, 0.9, 0.2, 0.6)       # Yellow — sensor to actuator
+CONNECTION_COLOR_FLOW = (0.3, 0.5, 1.0, 0.6)          # Blue — pipe/pump fluid path
+CONNECTION_COLOR_THERMAL = (1.0, 0.5, 0.1, 0.5)       # Orange — heat radiation
+CONNECTION_COLOR_STRUCTURAL = (0.8, 0.8, 0.8, 0.4)    # White — load-bearing dependency
+
+CONNECTION_COLORS: dict[str, tuple[float, float, float, float]] = {
+    "trigger": CONNECTION_COLOR_TRIGGER,
+    "flow": CONNECTION_COLOR_FLOW,
+    "thermal": CONNECTION_COLOR_THERMAL,
+    "structural": CONNECTION_COLOR_STRUCTURAL,
+}

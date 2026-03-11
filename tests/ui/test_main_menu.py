@@ -83,8 +83,8 @@ class TestMenuConstants:
         assert indices == [0, 1, 2, 3]
 
     def test_difficulty_has_expected_count(self):
-        """Difficulty section should have 10 slider entries."""
-        assert len(DIFFICULTY_SETTINGS) == 10
+        """Difficulty section should have 9 slider entries."""
+        assert len(DIFFICULTY_SETTINGS) == 9
 
     def test_visibility_has_expected_count(self):
         """Visibility section should have 8 slider entries."""
@@ -133,12 +133,12 @@ class TestConfigModification:
 
     def test_setattr_changes_config_value(self):
         """Setting a config attr via setattr should be visible via _cfg.X."""
-        original = _cfg.INTRUDER_DEFAULT_HP
+        original = _cfg.INTRUDER_HP_MULTIPLIER
         try:
-            setattr(_cfg, "INTRUDER_DEFAULT_HP", 999)
-            assert _cfg.INTRUDER_DEFAULT_HP == 999
+            setattr(_cfg, "INTRUDER_HP_MULTIPLIER", 2.5)
+            assert _cfg.INTRUDER_HP_MULTIPLIER == 2.5
         finally:
-            setattr(_cfg, "INTRUDER_DEFAULT_HP", original)
+            setattr(_cfg, "INTRUDER_HP_MULTIPLIER", original)
 
     def test_fog_color_tuple_modification(self):
         """FOG_COLOR tuple can be replaced via setattr."""
@@ -164,16 +164,16 @@ class TestConfigModification:
     def test_module_ref_not_copied_at_import_time(self):
         """Demonstrate that direct import copies don't see module ref changes."""
         # This test documents the *reason* we use module refs
-        from dungeon_builder.config import INTRUDER_DEFAULT_HP as copied_val
-        original = _cfg.INTRUDER_DEFAULT_HP
+        from dungeon_builder.config import INTRUDER_HP_MULTIPLIER as copied_val
+        original = _cfg.INTRUDER_HP_MULTIPLIER
         try:
-            _cfg.INTRUDER_DEFAULT_HP = 12345
+            _cfg.INTRUDER_HP_MULTIPLIER = 12345
             # The copied value should NOT have changed
             assert copied_val == original
             # But the module ref DOES see the change
-            assert _cfg.INTRUDER_DEFAULT_HP == 12345
+            assert _cfg.INTRUDER_HP_MULTIPLIER == 12345
         finally:
-            _cfg.INTRUDER_DEFAULT_HP = original
+            _cfg.INTRUDER_HP_MULTIPLIER = original
 
 
 # ── Test: GameState.menu_open ───────────────────────────────────────────
@@ -274,24 +274,24 @@ class TestConfigChangedEvent:
         bus = EventBus()
         received = []
         bus.subscribe("config_changed", lambda **kw: received.append(kw))
-        bus.publish("config_changed", key="INTRUDER_DEFAULT_HP", value=100)
+        bus.publish("config_changed", key="INTRUDER_HP_MULTIPLIER", value=2.0)
         assert len(received) == 1
-        assert received[0]["key"] == "INTRUDER_DEFAULT_HP"
-        assert received[0]["value"] == 100
+        assert received[0]["key"] == "INTRUDER_HP_MULTIPLIER"
+        assert received[0]["value"] == 2.0
 
     def test_reset_defaults_restores_values(self):
         """capture_defaults + setattr + restore should round-trip config values."""
         defaults = capture_defaults(DIFFICULTY_SETTINGS)
-        original_hp = _cfg.INTRUDER_DEFAULT_HP
+        original = _cfg.INTRUDER_HP_MULTIPLIER
         try:
-            _cfg.INTRUDER_DEFAULT_HP = 999
-            assert _cfg.INTRUDER_DEFAULT_HP == 999
+            _cfg.INTRUDER_HP_MULTIPLIER = 3.5
+            assert _cfg.INTRUDER_HP_MULTIPLIER == 3.5
             # Restore from defaults snapshot
             for attr, val in defaults.items():
                 setattr(_cfg, attr, val)
-            assert _cfg.INTRUDER_DEFAULT_HP == original_hp
+            assert _cfg.INTRUDER_HP_MULTIPLIER == original
         finally:
-            _cfg.INTRUDER_DEFAULT_HP = original_hp
+            _cfg.INTRUDER_HP_MULTIPLIER = original
 
 
 # ── Test: main.py wiring (interface checks) ─────────────────────────────

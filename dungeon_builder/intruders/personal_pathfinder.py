@@ -7,6 +7,13 @@ archetype abilities: diggers can path through solid, flyers can move
 vertically without slopes, phase-walkers can pass through thin walls, etc.
 Fire immunity is equipment-driven and passed as a separate flag.
 
+Phase-walk uses an augmented A* state ``(x, y, z, walls_used)`` to track
+consecutive wall cells traversed.  The wall counter is a hard constraint
+(not a heuristic cost): it resets to 0 when entering a walkable cell and
+blocks movement when it would exceed ``phase_thickness``.  This gives
+phase-walkers a dual-cost pathfinding algorithm — heuristic distance for
+route planning, wall budget for traversal legality.
+
 Dependencies: config, intruders.archetypes, intruders.personal_map
 Dependents: intruders.decision, tests/intruders/test_personal_pathfinder.py,
     tests/intruders/test_ai_improvements.py,
@@ -58,6 +65,27 @@ if TYPE_CHECKING:
 # Block types universally traversable (when revealed)
 _WALK_TYPES = frozenset({VOXEL_AIR, VOXEL_SLOPE, VOXEL_STAIRS})
 
+# Block types that are walkable for the purpose of resetting the phase-walk
+# wall counter (any block not classified as "solid wall" by _move_cost).
+# This is a superset of _WALK_TYPES including doors, traps, etc.
+_PHASE_RESET_TYPES = frozenset({
+    VOXEL_AIR, VOXEL_SLOPE, VOXEL_STAIRS,
+    VOXEL_DOOR, VOXEL_SPIKE, VOXEL_TREASURE, VOXEL_TARP,
+    VOXEL_ROLLING_STONE, VOXEL_GOLD_BAIT, VOXEL_HEAT_BEACON,
+    VOXEL_PRESSURE_PLATE, VOXEL_ALARM_BELL, VOXEL_FRAGILE_FLOOR,
+    VOXEL_STEAM_VENT, VOXEL_FLOODGATE, VOXEL_ENCHANTED_DOOR,
+    VOXEL_ENCHANTED_FLOODGATE, VOXEL_LAVA,
+})
+
+# Types that phase-walkers cannot pass through regardless of budget
+_PHASE_IMPASSABLE = frozenset({
+    VOXEL_REINFORCED_WALL, VOXEL_BEDROCK, VOXEL_CORE,
+    VOXEL_WATER, VOXEL_IRON_BARS,
+})
+
+# Movement cost for phasing through a wall cell
+_PHASE_WALK_COST = 5.0
+
 
 class PersonalPathfinder:
     """Fog-of-war A* for a single intruder."""
@@ -77,6 +105,11 @@ class PersonalPathfinder:
         Only uses cells present in *personal_map.seen*.  Traversability
         and move costs depend on the *archetype*'s abilities and
         *has_fire_immunity* (equipment-driven, not innate).
+
+        For phase-walkers (``archetype.phase_thickness >= 1``), the search
+        state is augmented with a wall counter to enforce the phase budget
+        as a hard constraint while using normal movement cost for the
+        heuristic.
         """
         if start == goal:
             return [start]
@@ -85,37 +118,187 @@ class PersonalPathfinder:
         if not personal_map.is_revealed(*goal):
             return None
 
-        open_set: list[tuple[float, int, tuple[int, int, int]]] = []
-        counter = 0
-        g_score: dict[tuple[int, int, int], float] = {start: 0.0}
-        came_from: dict[tuple[int, int, int], tuple[int, int, int]] = {}
-        f0 = _heuristic(start, goal)
-        heapq.heappush(open_set, (f0, counter, start))
-        counter += 1
-
-        iterations = 0
-        while open_set and iterations < max_iterations:
-            iterations += 1
-            _, _, current = heapq.heappop(open_set)
-
-            if current == goal:
-                return _reconstruct(came_from, current)
-
-            current_g = g_score[current]
-
-            for neighbor, move_cost in _get_neighbors(
-                personal_map, current, archetype,
+        if archetype.phase_thickness >= 1:
+            return _find_path_phase(
+                personal_map, start, goal, archetype,
                 has_fire_immunity=has_fire_immunity,
-            ):
-                tentative_g = current_g + move_cost
-                if tentative_g < g_score.get(neighbor, float("inf")):
-                    g_score[neighbor] = tentative_g
-                    came_from[neighbor] = current
-                    f = tentative_g + _heuristic(neighbor, goal)
-                    heapq.heappush(open_set, (f, counter, neighbor))
-                    counter += 1
+                max_iterations=max_iterations,
+            )
 
-        return None  # No path found
+        return _find_path_standard(
+            personal_map, start, goal, archetype,
+            has_fire_immunity=has_fire_immunity,
+            max_iterations=max_iterations,
+        )
+
+
+# ── Standard A* (non-phase-walkers) ─────────────────────────────────────
+
+
+def _find_path_standard(
+    personal_map: PersonalMap,
+    start: tuple[int, int, int],
+    goal: tuple[int, int, int],
+    archetype: ArchetypeStats,
+    *,
+    has_fire_immunity: bool = False,
+    max_iterations: int = PERSONAL_PATHFINDER_MAX_ITERATIONS,
+) -> list[tuple[int, int, int]] | None:
+    """Standard A* without phase-walk augmentation."""
+    open_set: list[tuple[float, int, tuple[int, int, int]]] = []
+    counter = 0
+    g_score: dict[tuple[int, int, int], float] = {start: 0.0}
+    came_from: dict[tuple[int, int, int], tuple[int, int, int]] = {}
+    f0 = _heuristic(start, goal)
+    heapq.heappush(open_set, (f0, counter, start))
+    counter += 1
+
+    iterations = 0
+    while open_set and iterations < max_iterations:
+        iterations += 1
+        _, _, current = heapq.heappop(open_set)
+
+        if current == goal:
+            return _reconstruct(came_from, current)
+
+        current_g = g_score[current]
+
+        for neighbor, move_cost in _get_neighbors(
+            personal_map, current, archetype,
+            has_fire_immunity=has_fire_immunity,
+        ):
+            tentative_g = current_g + move_cost
+            if tentative_g < g_score.get(neighbor, float("inf")):
+                g_score[neighbor] = tentative_g
+                came_from[neighbor] = current
+                f = tentative_g + _heuristic(neighbor, goal)
+                heapq.heappush(open_set, (f, counter, neighbor))
+                counter += 1
+
+    return None
+
+
+# ── Phase-walk A* (augmented state) ──────────────────────────────────────
+
+# Augmented state: (x, y, z, walls_used)
+# walls_used = number of consecutive wall cells traversed in the current
+# phase-walk sequence.  Resets to 0 when entering a non-wall cell.
+# A move into a wall cell is only allowed if walls_used < phase_thickness.
+
+_AugState = tuple[int, int, int, int]  # (x, y, z, walls_used)
+
+
+def _find_path_phase(
+    personal_map: PersonalMap,
+    start: tuple[int, int, int],
+    goal: tuple[int, int, int],
+    archetype: ArchetypeStats,
+    *,
+    has_fire_immunity: bool = False,
+    max_iterations: int = PERSONAL_PATHFINDER_MAX_ITERATIONS,
+) -> list[tuple[int, int, int]] | None:
+    """A* with augmented state for phase-walk wall budget tracking.
+
+    The search state is ``(x, y, z, walls_used)`` where ``walls_used``
+    counts consecutive wall cells traversed.  This is a hard constraint:
+    moves into wall cells are only allowed while ``walls_used <
+    phase_thickness``.  The counter resets to 0 when the eidolon enters
+    any non-wall (walkable) cell.
+    """
+    start_aug: _AugState = (start[0], start[1], start[2], 0)
+    phase_max = archetype.phase_thickness
+
+    open_set: list[tuple[float, int, _AugState]] = []
+    counter = 0
+    g_score: dict[_AugState, float] = {start_aug: 0.0}
+    came_from: dict[_AugState, _AugState] = {}
+    f0 = _heuristic(start, goal)
+    heapq.heappush(open_set, (f0, counter, start_aug))
+    counter += 1
+
+    iterations = 0
+    while open_set and iterations < max_iterations:
+        iterations += 1
+        _, _, current = heapq.heappop(open_set)
+
+        cx, cy, cz, cwalls = current
+        if (cx, cy, cz) == goal:
+            return _reconstruct_phase(came_from, current)
+
+        current_g = g_score[current]
+
+        for neighbor_aug, move_cost in _get_neighbors_phase(
+            personal_map, current, archetype, phase_max,
+            has_fire_immunity=has_fire_immunity,
+        ):
+            tentative_g = current_g + move_cost
+            if tentative_g < g_score.get(neighbor_aug, float("inf")):
+                g_score[neighbor_aug] = tentative_g
+                came_from[neighbor_aug] = current
+                nx, ny, nz, _ = neighbor_aug
+                f = tentative_g + _heuristic((nx, ny, nz), goal)
+                heapq.heappush(open_set, (f, counter, neighbor_aug))
+                counter += 1
+
+    return None
+
+
+def _get_neighbors_phase(
+    personal_map: PersonalMap,
+    state: _AugState,
+    archetype: ArchetypeStats,
+    phase_max: int,
+    *,
+    has_fire_immunity: bool = False,
+) -> list[tuple[_AugState, float]]:
+    """Return (augmented_neighbor, cost) pairs for phase-walk A*."""
+    x, y, z, walls_used = state
+    result: list[tuple[_AugState, float]] = []
+
+    for dx, dy, dz in ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0),
+                        (0, 0, 1), (0, 0, -1)):
+        nx, ny, nz = x + dx, y + dy, z + dz
+
+        vtype = personal_map.get_type(nx, ny, nz)
+        if vtype is None:
+            continue
+
+        # First, try the standard move cost
+        cost = _move_cost(personal_map, (nx, ny, nz), vtype, archetype, dz,
+                          has_fire_immunity=has_fire_immunity)
+        if cost is not None:
+            # Non-wall cell: reset wall counter to 0
+            result.append(((nx, ny, nz, 0), cost))
+            continue
+
+        # Standard move failed — try phase-walk (horizontal only)
+        if dz != 0:
+            continue
+        if vtype in _PHASE_IMPASSABLE:
+            continue
+        # This is a solid wall cell. Phase through if budget allows.
+        new_walls = walls_used + 1
+        if new_walls > phase_max:
+            continue  # Wall budget exhausted
+        result.append(((nx, ny, nz, new_walls), _PHASE_WALK_COST))
+
+    return result
+
+
+def _reconstruct_phase(
+    came_from: dict[_AugState, _AugState],
+    current: _AugState,
+) -> list[tuple[int, int, int]]:
+    """Reconstruct path from augmented states, stripping wall counter."""
+    path: list[tuple[int, int, int]] = [(current[0], current[1], current[2])]
+    while current in came_from:
+        current = came_from[current]
+        path.append((current[0], current[1], current[2]))
+    path.reverse()
+    return path
+
+
+# ── Standard neighbor expansion ─────────────────────────────────────────
 
 
 def _heuristic(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
@@ -141,14 +324,6 @@ def _get_neighbors(
 
         vtype = personal_map.get_type(nx, ny, nz)
         if vtype is None:
-            # Unrevealed cell — check for phase-walk through solid
-            if archetype.phase_thickness >= 1 and dz == 0:
-                # Look one step further: if the cell beyond is revealed as air,
-                # treat the unrevealed cell as a thin wall we can phase through.
-                # (We cannot actually enter unrevealed cells, but the neighbor
-                #  expansion skips them, so phase-walk is handled below for
-                #  revealed solid cells.)
-                pass
             continue
 
         cost = _move_cost(personal_map, npos, vtype, archetype, dz,
@@ -173,6 +348,9 @@ def _move_cost(
     *dz* is -1 (up in array = shallower), +1 (down = deeper), or 0 (horizontal).
     *has_fire_immunity* is True when the intruder's equipment grants fire
     immunity (equipment-driven, not an innate archetype trait).
+
+    Phase-walk is NOT handled here — it's managed by the augmented-state
+    A* in ``_find_path_phase`` / ``_get_neighbors_phase``.
     """
     base_cost = 1.0
 
@@ -285,22 +463,6 @@ def _move_cost(
     # --- Reinforced wall / bedrock / core ---
     if vtype in (VOXEL_REINFORCED_WALL, VOXEL_BEDROCK, VOXEL_CORE):
         return None  # Never traversable
-
-    # --- Phase-walk through thin walls ---
-    if archetype.phase_thickness >= 1 and dz == 0:
-        # Treat any single revealed solid cell as thickness 1.
-        # Allow phase-walk if the cell on the far side is revealed as air.
-        x, y, z = pos
-        # Check if there is a walkable cell beyond (in the same direction).
-        # We infer direction from pos vs. neighbors that called us; for
-        # simplicity, check all horizontal neighbors of *pos* for an
-        # air-type cell that is revealed.
-        for ddx, ddy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            beyond = (x + ddx, y + ddy, z)
-            beyond_vtype = personal_map.get_type(*beyond)
-            if beyond_vtype is not None and beyond_vtype in _WALK_TYPES:
-                return 5.0  # Phase-walk cost
-        # No air on the other side — cannot phase
 
     # --- Other solid blocks ---
     if archetype.can_dig and vtype not in NON_DIGGABLE:

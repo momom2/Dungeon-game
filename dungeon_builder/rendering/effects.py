@@ -1,4 +1,5 @@
-"""Visual effects: core marker, hover highlight, craft/dig/ore-glow markers.
+"""Visual effects: core marker, hover highlight, craft/dig/ore-glow markers,
+connection visualization.
 
 Markers for world-positioned effects (core, crafting, pending digs, ore
 glows) are attached to the layer system so they inherit z-level alpha
@@ -9,7 +10,11 @@ Craft-mode enhancements: colour-coded hover wireframe (green valid, hidden
 invalid), semi-transparent ghost block preview, and placement flash
 animation.
 
-Dependencies: config, rendering.layer_slice
+Connection visualization: line segments between logically connected blocks
+(trigger, flow, thermal, structural), shown on block selection, craft
+hover, or Connections render mode.
+
+Dependencies: config, building.connections, rendering.layer_slice
 Dependents: main (wiring), tests/rendering/test_effects.py
 """
 
@@ -34,9 +39,15 @@ from panda3d.core import (
 from direct.showbase.ShowBase import ShowBase
 
 import dungeon_builder.config as _cfg
+from dungeon_builder.building.connections import (
+    CONNECTABLE_TYPES,
+    Connection,
+    find_connections,
+)
 from dungeon_builder.config import (
     VOXEL_AIR,
     VOXEL_WATER,
+    RENDER_MODE_CONNECTIONS,
     RENDER_MODE_PROSPECTING,
 )
 
@@ -132,6 +143,32 @@ def _make_highlight_cube() -> GeomNode:
     return node
 
 
+def _make_connection_line() -> GeomNode:
+    """Create a reusable line segment with two dynamic vertices.
+
+    The geometry is created with ``UH_dynamic`` so that endpoint positions
+    and colours can be rewritten per frame via ``modify_vertex_data()``.
+    """
+    vdata = GeomVertexData(
+        "connection", GeomVertexFormat.get_v3c4(), Geom.UH_dynamic,
+    )
+    vdata.set_num_rows(2)
+    vertex = GeomVertexWriter(vdata, "vertex")
+    color = GeomVertexWriter(vdata, "color")
+    # Placeholder positions (will be overwritten)
+    vertex.add_data3f(0, 0, 0)
+    color.add_data4f(1, 1, 1, 0.5)
+    vertex.add_data3f(1, 1, 1)
+    color.add_data4f(1, 1, 1, 0.5)
+    prim = GeomLines(Geom.UH_dynamic)
+    prim.add_vertices(0, 1)
+    geom = Geom(vdata)
+    geom.add_primitive(prim)
+    node = GeomNode("connection_line")
+    node.add_geom(geom)
+    return node
+
+
 def _make_craft_marker() -> GeomNode:
     """Create a semi-transparent green cube for craft-valid air positions.
 
@@ -218,7 +255,11 @@ class EffectsRenderer:
         # Craft-mode visual state
         self._craft_mode: bool = False
         self._ghost_np: NodePath | None = None
+        self._radius_np: NodePath | None = None
         self._flash_nps: list[NodePath] = []  # Pool of reusable flash markers
+
+        # Connection visualization state
+        self._connection_nps: list[NodePath] = []
 
         # Create the reusable highlight cube (hidden initially)
         self._init_highlight()
@@ -244,6 +285,8 @@ class EffectsRenderer:
         event_bus.subscribe("drag_select_cleared", self._on_drag_cleared)
         event_bus.subscribe("dig_batch_pending", self._on_dig_batch_pending)
         event_bus.subscribe("dig_batch_cancelled", self._on_dig_batch_cancelled)
+        event_bus.subscribe("block_selected", self._on_block_selected)
+        event_bus.subscribe("block_deselected", self._on_block_deselected)
 
     def _get_layer_parent(self, z: int) -> NodePath:
         """Return the layer NodePath for world-positioned markers."""
@@ -330,35 +373,48 @@ class EffectsRenderer:
         self._craft_mode = True
 
     def _on_craft_mode_exited(self, **kwargs) -> None:
-        """Leave craft mode — reset wireframe colour, hide ghost."""
+        """Leave craft mode — reset wireframe colour, hide ghost, radius, connections."""
         self._craft_mode = False
         if self._highlight_np is not None:
             self._highlight_np.set_color_scale(1, 1, 1, 1)
         self._hide_ghost_preview()
+        self._hide_radius_preview()
+        self._hide_connections()
 
     def _on_craft_hover_valid(
         self, x: int, y: int, z: int,
-        output_vtype: int = 0, **kwargs,
+        output_vtype: int = 0, effect_radius: int = 0, **kwargs,
     ) -> None:
-        """Show green wireframe and ghost preview at a valid craft position."""
+        """Show green wireframe, ghost preview, radius, and connections at a valid craft position."""
         if self._highlight_np is not None:
             r, g, b, a = _cfg.CRAFT_HOVER_VALID_COLOR
             self._highlight_np.set_color_scale(r, g, b, a)
             self._highlight_np.set_pos(x, y, -z)
             self._highlight_np.show()
         self._show_ghost_preview(x, y, z, output_vtype)
+        self._show_radius_preview(x, y, z, effect_radius)
+        # Show hypothetical connections for the block being placed
+        if self._voxel_grid is not None and output_vtype != 0:
+            conns = find_connections(self._voxel_grid, x, y, z, vtype=output_vtype)
+            self._show_connections(conns)
+        else:
+            self._hide_connections()
 
     def _on_craft_hover_invalid(self, x: int, y: int, z: int, **kwargs) -> None:
         """Hide wireframe on invalid craft position."""
         if self._highlight_np is not None:
             self._highlight_np.hide()
         self._hide_ghost_preview()
+        self._hide_radius_preview()
+        self._hide_connections()
 
     def _on_craft_hover_clear(self, **kwargs) -> None:
         """Clear craft hover state (mouse left grid)."""
         if self._highlight_np is not None:
             self._highlight_np.hide()
         self._hide_ghost_preview()
+        self._hide_radius_preview()
+        self._hide_connections()
 
     # ── Ghost block preview ──────────────────────────────────────────
 
@@ -390,6 +446,39 @@ class EffectsRenderer:
         """Hide the ghost preview marker."""
         if self._ghost_np is not None:
             self._ghost_np.hide()
+
+    # ── Effect radius preview ────────────────────────────────────────
+
+    def _show_radius_preview(
+        self, x: int, y: int, z: int, radius: int,
+    ) -> None:
+        """Show an orange wireframe box showing the effect radius."""
+        if radius <= 0:
+            self._hide_radius_preview()
+            return
+
+        if self._radius_np is None:
+            node = _make_highlight_cube()
+            np = self.app.render.attach_new_node(node)
+            np.set_transparency(TransparencyAttrib.M_alpha)
+            np.set_light_off()
+            np.set_bin("fixed", 47)  # Below ghost (48), below wireframe (50)
+            np.set_depth_test(False)
+            np.set_depth_write(False)
+            self._radius_np = np
+
+        size = 2 * radius + 1
+        r, g, b, a = _cfg.CRAFT_RADIUS_COLOR
+        self._radius_np.set_color_scale(r, g, b, a)
+        self._radius_np.set_scale(size, size, size)
+        # Center on hover position (wireframe cube origin is at (0,0,0) corner)
+        self._radius_np.set_pos(x - radius, y - radius, -z - radius)
+        self._radius_np.show()
+
+    def _hide_radius_preview(self) -> None:
+        """Hide the effect radius wireframe."""
+        if self._radius_np is not None:
+            self._radius_np.hide()
 
     # ── Placement flash ──────────────────────────────────────────────
 
@@ -540,18 +629,25 @@ class EffectsRenderer:
             self._scan_ore_glows()
 
     def _on_z_changed(self, z: int, **kwargs) -> None:
-        """Re-scan ore glows when z-level changes."""
+        """Re-scan overlays when z-level changes."""
         self._current_z = z
         if self._render_mode == RENDER_MODE_PROSPECTING:
             self._scan_ore_glows()
+        elif self._render_mode == RENDER_MODE_CONNECTIONS:
+            self._on_render_mode_connections()
 
     def _on_render_mode_changed(self, mode: str, **kwargs) -> None:
-        """Show/hide ore glows based on render mode."""
+        """Show/hide mode-specific overlays based on render mode."""
         self._render_mode = mode
         if mode == RENDER_MODE_PROSPECTING:
             self._scan_ore_glows()
+            self._hide_connections()
+        elif mode == RENDER_MODE_CONNECTIONS:
+            self._hide_ore_glows()
+            self._on_render_mode_connections()
         else:
             self._hide_ore_glows()
+            self._hide_connections()
 
     def _hide_ore_glows(self) -> None:
         """Hide all ore glow markers."""
@@ -651,3 +747,74 @@ class EffectsRenderer:
                 marker.set_color_scale(*glow_color)
             marker.set_pos(x, y, -z)
             marker.show()
+
+    # ── Connection visualization ──────────────────────────────────────
+
+    def _on_block_selected(self, x: int, y: int, z: int,
+                           vtype: int = 0, **kwargs) -> None:
+        """Show connections for the selected block."""
+        if self._voxel_grid is None:
+            return
+        conns = find_connections(self._voxel_grid, x, y, z)
+        self._show_connections(conns)
+
+    def _on_block_deselected(self, **kwargs) -> None:
+        """Clear connection lines when block is deselected."""
+        self._hide_connections()
+
+    def _show_connections(self, connections: list[Connection]) -> None:
+        """Render line segments for a list of connections."""
+        # Hide all existing
+        for np_node in self._connection_nps:
+            np_node.hide()
+
+        if not connections:
+            return
+
+        for i, conn in enumerate(connections):
+            if i >= len(self._connection_nps):
+                node = _make_connection_line()
+                np_node = self.app.render.attach_new_node(node)
+                np_node.set_transparency(TransparencyAttrib.M_alpha)
+                np_node.set_light_off()
+                np_node.set_render_mode_thickness(2.5)
+                np_node.set_bin("fixed", 46)  # Below radius (47), ghost (48)
+                np_node.set_depth_test(False)
+                np_node.set_depth_write(False)
+                self._connection_nps.append(np_node)
+
+            marker = self._connection_nps[i]
+            sx, sy, sz = conn.source
+            tx, ty, tz = conn.target
+            color = _cfg.CONNECTION_COLORS.get(conn.conn_type, (1, 1, 1, 0.5))
+
+            # Update the line endpoints via vertex data rewrite
+            geom = marker.node().modify_geom(0)
+            vdata = geom.modify_vertex_data()
+            vertex = GeomVertexWriter(vdata, "vertex")
+            cw = GeomVertexWriter(vdata, "color")
+            vertex.set_data3f(sx + 0.5, sy + 0.5, -sz + 0.5)
+            cw.set_data4f(*color)
+            vertex.set_data3f(tx + 0.5, ty + 0.5, -tz + 0.5)
+            cw.set_data4f(*color)
+            marker.show()
+
+    def _hide_connections(self) -> None:
+        """Hide all connection line markers."""
+        for np_node in self._connection_nps:
+            np_node.hide()
+
+    def _on_render_mode_connections(self) -> None:
+        """Show all connections on the current z-level."""
+        if self._voxel_grid is None:
+            return
+        grid = self._voxel_grid
+        z = self._current_z
+        w, d, _h = grid.grid.shape
+        all_conns: list[Connection] = []
+        for x in range(w):
+            for y in range(d):
+                vtype = int(grid.grid[x, y, z])
+                if vtype in CONNECTABLE_TYPES:
+                    all_conns.extend(find_connections(grid, x, y, z))
+        self._show_connections(all_conns)

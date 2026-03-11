@@ -44,7 +44,7 @@ This makes the game moddable — a modder can tweak config to reshape
 gameplay without touching system code.
 
 ### 4. Physics as Foundation
-Emergent gameplay comes from interacting physics systems, not scripted
+Emergent gameplay comes from interacting physics systems in preference to scripted
 behaviors. New content should leverage existing physics rather than
 special-casing. A trap's lethality comes from real structural/thermal/
 fluid mechanics, not a hardcoded "deal X damage" check.
@@ -143,6 +143,10 @@ tests. A test should answer: "would a player notice if this broke?"
 - Use `config.py` values in assertions (not hardcoded duplicates) so
   tests stay valid when balance changes.
 - Fixtures in `conftest.py` for common setups (small grids, stone grids).
+- **Never weaken tests without user confirmation.** When a test fails,
+  fix the underlying code — don't relax thresholds, loosen assertions,
+  or widen tolerances. A failing test is a signal that something is
+  wrong; investigate the root cause first.
 
 ---
 

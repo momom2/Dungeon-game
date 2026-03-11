@@ -176,7 +176,13 @@ def test_river_channel():
     river_bed_z = getattr(grid, '_river_bed_z', {})
     river_path = getattr(grid, '_river_path', [])
     assert len(river_cells) > 20, "River should have significant coverage"
-    assert len(river_path) > 5, "River path should span multiple cells"
+    # Source and sink are on opposite edges, so the path must cross at
+    # least half the map dimension.
+    min_span = min(grid.width, grid.depth) // 2
+    assert len(river_path) > min_span, (
+        f"River path should span at least half the map ({min_span} cells), "
+        f"got {len(river_path)}"
+    )
 
     # All river cells should be at SURFACE_Z
     water_types = {VOXEL_WATER, VOXEL_WATER_SOURCE, VOXEL_WATER_SINK}
@@ -398,8 +404,8 @@ def test_lava_tunnel_ceiling_intact():
             checked += 1
     assert checked > 0, "Should have checked some ceiling cells"
     solid_ratio = solid_count / checked
-    assert solid_ratio > 0.80, (
-        f"At least 80% of ceiling cells should be solid, got {solid_ratio:.1%} "
+    assert solid_ratio > 0.90, (
+        f"At least 90% of ceiling cells should be solid, got {solid_ratio:.1%} "
         f"({solid_count}/{checked})"
     )
 

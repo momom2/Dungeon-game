@@ -554,10 +554,10 @@ def test_toggle_same_recipe_exits():
     assert gs.craft_mode_active is False
 
 
-def test_no_matching_material_error():
-    """Selecting a recipe without matching material produces an error."""
+def test_no_matching_material_no_mana_error():
+    """Selecting a substitutable recipe without material or mana is rejected."""
     bus, grid, ms, cs, gs = _setup()
-    ms.held_materials = {VOXEL_STONE: 1}  # no iron ingot
+    ms.held_materials = {VOXEL_STONE: 1}  # no iron ingot, no mana system
 
     errors = []
     bus.subscribe("error_message", lambda **kw: errors.append(kw))
@@ -565,7 +565,7 @@ def test_no_matching_material_error():
     bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
 
     assert len(errors) == 1
-    assert "material" in errors[0]["text"].lower()
+    assert "mana" in errors[0]["text"].lower()
     assert gs.craft_mode_active is False
 
 
@@ -700,7 +700,7 @@ def _cs_book():
 # ===========================================================================
 
 
-def _setup_nbc(width=10, depth=10, height=10):
+def _setup_nbc(width=10, depth=10, height=10, mana=None):
     bus = EventBus()
     grid = VoxelGrid(width=width, depth=depth, height=height)
     grid.visible[:] = True
@@ -708,7 +708,12 @@ def _setup_nbc(width=10, depth=10, height=10):
     gs = GameState(DEFAULT_SEED)
     gs.event_bus = bus
     ms = MoveSystem(bus, grid, gs)
-    cs = CraftingSystem(bus, grid, ms, gs)
+    mana_system = None
+    if mana is not None:
+        from dungeon_builder.dungeon_core.mana import ManaSystem
+        mana_system = ManaSystem(bus, grid, build_system=None)
+        mana_system.mana = mana
+    cs = CraftingSystem(bus, grid, ms, gs, mana_system=mana_system)
     gs.move_system = ms
     return bus, grid, ms, cs
 
@@ -778,7 +783,7 @@ class TestExistingRecipesMetalType:
 
 class TestGoldBait:
     def test_craft_gold_bait(self):
-        bus, grid, ms, cs = _setup_nbc()
+        bus, grid, ms, cs = _setup_nbc(mana=500)
         grid.grid[4, 4, 4] = VOXEL_AIR
         grid.grid[4, 4, 5] = VOXEL_STONE  # solid below
         grid.grid[5, 4, 4] = VOXEL_STONE  # wall
@@ -830,7 +835,7 @@ class TestGoldBait:
 
 class TestHeatBeacon:
     def test_craft_heat_beacon(self):
-        bus, grid, ms, cs = _setup_nbc()
+        bus, grid, ms, cs = _setup_nbc(mana=500)
         grid.grid[4, 4, 4] = VOXEL_STONE
         grid.temperature[4, 4, 4] = 300.0
         _craft_nbc(bus, cs, "Heat Beacon", 4, 4, 4, ms,
@@ -866,7 +871,7 @@ class TestHeatBeacon:
 
 class TestPressurePlate:
     def test_craft_pressure_plate(self):
-        bus, grid, ms, cs = _setup_nbc()
+        bus, grid, ms, cs = _setup_nbc(mana=500)
         grid.grid[4, 4, 4] = VOXEL_STONE
         grid.grid[4, 4, 3] = VOXEL_AIR  # air above
         _craft_nbc(bus, cs, "Pressure Plate", 4, 4, 4, ms,
@@ -953,7 +958,7 @@ class TestFloodgate:
 
 class TestAlarmBell:
     def test_craft_alarm_bell(self):
-        bus, grid, ms, cs = _setup_nbc()
+        bus, grid, ms, cs = _setup_nbc(mana=500)
         grid.grid[4, 4, 4] = VOXEL_AIR
         grid.grid[4, 4, 5] = VOXEL_STONE  # solid below
         grid.grid[5, 4, 4] = VOXEL_STONE  # wall
@@ -1439,3 +1444,168 @@ class TestCraftRecipeOutputVtype:
 
         assert len(valid_events) == 1
         assert valid_events[0]["output_vtype"] == VOXEL_REINFORCED_WALL
+
+
+# ===========================================================================
+# Mana-or-materials dual cost model tests
+# ===========================================================================
+
+
+class TestManaCrafting:
+    """Verify compute_craft_cost integration in CraftingSystem."""
+
+    def test_mana_only_craft_enters_mode(self):
+        """Mana-only crafting (no held material) enters craft mode."""
+        bus, grid, ms, cs = _setup_nbc(mana=100)
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {}  # no materials at all
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        # Iron ingot is substitutable (mana_value=30), assembly=0 → total=30
+        assert cs.is_craft_mode_active
+        assert cs._active_held_type == VOXEL_IRON_INGOT  # canonical type
+
+    def test_mana_only_craft_succeeds(self):
+        """Mana-only crafting places the block and deducts mana."""
+        bus, grid, ms, cs = _setup_nbc(mana=100)
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {}
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        bus.publish("craft_at_position", x=4, y=4, z=4)
+        assert grid.get(4, 4, 4) == VOXEL_REINFORCED_WALL
+        # 30 mana deducted (iron ingot mana_value)
+        assert cs.mana_system.mana == 70
+
+    def test_mana_only_no_material_consumed(self):
+        """Mana-only crafting doesn't consume materials from inventory."""
+        bus, grid, ms, cs = _setup_nbc(mana=100)
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_STONE: 5}  # unrelated material
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        bus.publish("craft_at_position", x=4, y=4, z=4)
+        assert grid.get(4, 4, 4) == VOXEL_REINFORCED_WALL
+        assert ms.held_materials[VOXEL_STONE] == 5  # untouched
+
+    def test_insufficient_mana_rejected(self):
+        """Mana-only craft with insufficient mana is rejected."""
+        bus, grid, ms, cs = _setup_nbc(mana=10)
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {}
+        errors = []
+        bus.subscribe("error_message", lambda **kw: errors.append(kw))
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        # Total cost=30, only 10 mana
+        assert not cs.is_craft_mode_active
+        assert len(errors) == 1
+        assert "mana" in errors[0]["text"].lower()
+
+    def test_material_offsets_mana_cost(self):
+        """Holding material reduces mana to assembly cost only."""
+        bus, grid, ms, cs = _setup_nbc(mana=500)
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 1}
+        ms.held_metal_types = {VOXEL_IRON_INGOT: METAL_IRON}
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        bus.publish("craft_at_position", x=4, y=4, z=4)
+        assert grid.get(4, 4, 4) == VOXEL_REINFORCED_WALL
+        # Reinforced Wall: assembly=0, material held → total=0 → no mana spent
+        assert cs.mana_system.mana == 500
+        # Material consumed
+        assert ms.get_count(VOXEL_IRON_INGOT) == 0
+
+    def test_assembly_cost_deducted_with_material(self):
+        """Assembly cost is deducted even when material is held."""
+        bus, grid, ms, cs = _setup_nbc(mana=500)
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        grid.temperature[4, 4, 4] = 300.0
+        ms.held_materials = {VOXEL_ENCHANTED_METAL: 1}
+        ms.held_metal_types = {VOXEL_ENCHANTED_METAL: METAL_ENCH_COPPER}
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Heat Beacon")
+        bus.publish("craft_at_position", x=4, y=4, z=4)
+        assert grid.get(4, 4, 4) == VOXEL_HEAT_BEACON
+        # Heat Beacon: assembly=25, material held → total=25
+        assert cs.mana_system.mana == 475
+
+    def test_zero_cost_craft_no_mana_system(self):
+        """Zero-cost recipe works without a mana system."""
+        bus, grid, ms, cs = _setup_nbc()  # no mana
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 1}
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        bus.publish("craft_at_position", x=4, y=4, z=4)
+        assert grid.get(4, 4, 4) == VOXEL_REINFORCED_WALL
+
+    def test_material_depleted_exits_without_mana(self):
+        """Depleting material exits craft mode when no mana available."""
+        bus, grid, ms, cs = _setup_nbc()  # no mana system
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 1}
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        bus.publish("craft_at_position", x=4, y=4, z=4)
+        assert not cs.is_craft_mode_active
+
+    def test_material_depleted_stays_with_mana(self):
+        """Depleting material keeps craft mode when mana can substitute."""
+        bus, grid, ms, cs = _setup_nbc(mana=100)
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        grid.grid[5, 5, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 1}
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        bus.publish("craft_at_position", x=4, y=4, z=4)
+        # Material depleted, but mana=100 can cover cost=30
+        assert cs.is_craft_mode_active
+        # Now it's in mana-only mode with canonical type
+        assert cs._active_held_type == VOXEL_IRON_INGOT
+
+    def test_remaining_count_material_based(self):
+        """Remaining count reflects held material count."""
+        bus, grid, ms, cs = _setup_nbc()
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {VOXEL_IRON_INGOT: 5}
+
+        remaining = []
+        bus.subscribe(
+            "craft_remaining_updated", lambda **kw: remaining.append(kw)
+        )
+
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        assert remaining[-1]["remaining"] == 5
+
+    def test_remaining_count_mana_based(self):
+        """Remaining count reflects mana when crafting without material."""
+        bus, grid, ms, cs = _setup_nbc(mana=100)
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        ms.held_materials = {}
+
+        remaining = []
+        bus.subscribe(
+            "craft_remaining_updated", lambda **kw: remaining.append(kw)
+        )
+
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Reinforced Wall")
+        # 100 mana / 30 cost per craft = 3
+        assert remaining[-1]["remaining"] == 3
+
+    def test_enchanted_offset_from_craft_fn(self):
+        """Enchanted offset is applied by craft_fn, not by CraftingSystem."""
+        bus, grid, ms, cs = _setup_nbc(mana=500)
+        grid.grid[4, 4, 4] = VOXEL_STONE
+        grid.temperature[4, 4, 4] = 300.0
+        # Hold regular copper — craft_fn should apply enchanted offset
+        ms.held_materials = {VOXEL_COPPER_INGOT: 1}
+        ms.held_metal_types = {VOXEL_COPPER_INGOT: METAL_COPPER}
+        cs._current_z = 4
+        bus.publish("craft_recipe_selected", recipe_name="Heat Beacon")
+        bus.publish("craft_at_position", x=4, y=4, z=4)
+        assert grid.get(4, 4, 4) == VOXEL_HEAT_BEACON
+        # craft_fn applies enchanted offset: METAL_COPPER -> METAL_ENCH_COPPER
+        assert grid.get_metal_type(4, 4, 4) == METAL_ENCH_COPPER

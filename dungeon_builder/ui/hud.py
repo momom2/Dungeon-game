@@ -1,7 +1,7 @@
 """Main HUD overlay: core HP, tick counter, speed controls, Z-level, tool/hand info.
 
-Dependencies: config, ui.voxel_names, ui.style, core.event_bus,
-    core.game_state, core.keybinding_registry
+Dependencies: config, ui.voxel_names, ui.style, ui.hud_inventory,
+    core.event_bus, core.game_state, core.keybinding_registry
 Dependents: main (wiring), tests/ui/test_hud.py
 """
 
@@ -11,15 +11,15 @@ import logging
 from typing import TYPE_CHECKING
 
 from direct.gui.DirectGui import (
-    DirectFrame, DirectLabel, DirectButton, DirectScrolledFrame,
+    DirectFrame, DirectLabel, DirectButton,
 )
 from panda3d.core import TextNode
 from direct.showbase.ShowBase import ShowBase
 from direct.task.Task import Task
 
 import dungeon_builder.config as _cfg
+from dungeon_builder.ui.hud_inventory import InventoryMixin
 from dungeon_builder.config import (
-    VOXEL_COLORS,
     RENDER_MODE_HEAT,
     RENDER_MODE_HUMIDITY,
     RENDER_MODE_MATTER,
@@ -29,6 +29,7 @@ from dungeon_builder.ui.voxel_names import VTYPE_NAMES as _VTYPE_NAMES
 from dungeon_builder.ui import style as _sty
 
 if TYPE_CHECKING:
+    from direct.gui.DirectGui import DirectScrolledFrame
     from dungeon_builder.core.event_bus import EventBus
     from dungeon_builder.core.game_state import GameState
     from dungeon_builder.core.keybinding_registry import KeybindingRegistry
@@ -36,7 +37,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("dungeon_builder.ui")
 
 
-class HUD:
+class HUD(InventoryMixin):
     """HUD showing game state, tool info, held material, and error messages."""
 
     def __init__(
@@ -217,7 +218,7 @@ class HUD:
         )
 
         self.book_btn = DirectButton(
-            text="Book [B]",
+            text="Palette [B]",
             text_scale=0.04, text_fg=_sty.HIGHLIGHT_COLOR,
             frameSize=(-0.12, 0.12, -0.03, 0.04),
             frameColor=_sty.BUTTON_BG_DIM,
@@ -226,14 +227,32 @@ class HUD:
             parent=a2d,
         )
 
-        # Debug spawn buttons (dev mode only)
+        # Debug buttons (dev mode only)
         self.spawn_surface_btn = DirectButton(
-            text="Spawn Surface",
+            text="Spawn Party",
             text_scale=0.035, text_fg=(1, 0.6, 0.6, 1),
-            frameSize=(-0.16, 0.16, -0.03, 0.04),
+            frameSize=(-0.13, 0.13, -0.03, 0.04),
             frameColor=(0.2, 0.1, 0.1, 0.8),
-            pos=(1.2, 0, -0.95),
+            pos=(1.05, 0, -0.95),
             command=lambda: event_bus.publish("debug_spawn_party"),
+            parent=a2d,
+        )
+        self.spawn_single_btn = DirectButton(
+            text="Spawn 1",
+            text_scale=0.035, text_fg=(1, 0.7, 0.5, 1),
+            frameSize=(-0.09, 0.09, -0.03, 0.04),
+            frameColor=(0.2, 0.1, 0.1, 0.8),
+            pos=(1.3, 0, -0.95),
+            command=lambda: event_bus.publish("debug_spawn_single"),
+            parent=a2d,
+        )
+        self.kill_all_btn = DirectButton(
+            text="Kill All",
+            text_scale=0.035, text_fg=(1, 0.3, 0.3, 1),
+            frameSize=(-0.09, 0.09, -0.03, 0.04),
+            frameColor=(0.3, 0.05, 0.05, 0.8),
+            pos=(1.5, 0, -0.95),
+            command=lambda: event_bus.publish("debug_kill_all"),
             parent=a2d,
         )
         self._update_spawn_buttons()
@@ -329,99 +348,6 @@ class HUD:
         new_speed = max(0, tm.speed - 1)
         tm.set_speed(new_speed)
 
-    # ── Inventory (bag) panel ────────────────────────────────────────
-
-    def _build_bag_panel(self) -> None:
-        """Build the left-side inventory panel (hidden initially)."""
-        a2d = self.app.aspect2d
-        self._bag_panel = DirectFrame(
-            frameColor=_sty.BG_COLOR,
-            frameSize=(-1.35, -0.55, -0.70, 0.70),
-            pos=(0, 0, 0), parent=a2d, sortOrder=_sty.PANEL_SORT_ORDER,
-        )
-        DirectLabel(
-            text="Inventory [I]",
-            text_fg=_sty.TITLE_COLOR, text_scale=0.045,
-            text_align=TextNode.A_left,
-            pos=(-1.30, 0, 0.62),
-            frameColor=_sty.TRANSPARENT, parent=self._bag_panel,
-        )
-        DirectButton(
-            text="X",
-            text_scale=0.04, text_fg=_sty.ERROR_COLOR,
-            frameSize=(-0.03, 0.03, -0.02, 0.035),
-            frameColor=_sty.BUTTON_BG_DIM,
-            pos=(-0.58, 0, 0.64),
-            command=self._toggle_bag_panel,
-            parent=self._bag_panel,
-        )
-        self._bag_scroll = DirectScrolledFrame(
-            frameColor=_sty.TRANSPARENT,
-            frameSize=(-1.35, -0.57, -0.68, 0.56),
-            canvasSize=(-1.35, -0.60, -1.0, 0),
-            scrollBarWidth=0.025,
-            pos=(0, 0, 0), parent=self._bag_panel,
-        )
-        self._bag_scroll.horizontalScroll.hide()
-        self._bag_panel.hide()
-
-    def _toggle_bag_panel(self) -> None:
-        """Show/hide the inventory panel."""
-        if self._bag_panel is None:
-            return
-        self._bag_panel_visible = not self._bag_panel_visible
-        if self._bag_panel_visible:
-            self._refresh_bag_panel()
-            self._bag_panel.show()
-        else:
-            self._bag_panel.hide()
-
-    def _refresh_bag_panel(self) -> None:
-        """Rebuild the item list inside the inventory panel."""
-        if self._bag_scroll is None:
-            return
-        canvas = self._bag_scroll.getCanvas()
-        for lbl in self._bag_item_labels:
-            lbl.destroy()
-        self._bag_item_labels.clear()
-
-        ms = self.game_state.move_system
-        if ms is None or not ms.held_materials:
-            lbl = DirectLabel(
-                text="  (empty)",
-                text_fg=_sty.MUTED_COLOR, text_scale=0.038,
-                text_align=TextNode.A_left,
-                pos=(-1.30, 0, -0.05),
-                frameColor=_sty.TRANSPARENT, parent=canvas,
-            )
-            self._bag_item_labels.append(lbl)
-            self._bag_scroll["canvasSize"] = (-1.35, -0.60, -0.15, 0)
-            return
-
-        y = -0.05
-        y_step = 0.055
-        for vtype, count in sorted(ms.held_materials.items()):
-            name = _VTYPE_NAMES.get(vtype, f"Type {vtype}")
-            vc = VOXEL_COLORS.get(vtype, (0.7, 0.7, 0.7, 1.0))
-            text_color = (
-                min(1.0, vc[0] + 0.3),
-                min(1.0, vc[1] + 0.3),
-                min(1.0, vc[2] + 0.3),
-                1.0,
-            )
-            lbl = DirectLabel(
-                text=f"  {name}  x{count}",
-                text_fg=text_color, text_scale=0.038,
-                text_align=TextNode.A_left,
-                pos=(-1.30, 0, y),
-                frameColor=_sty.TRANSPARENT, parent=canvas,
-            )
-            self._bag_item_labels.append(lbl)
-            y -= y_step
-
-        total_h = len(ms.held_materials) * y_step + 0.1
-        self._bag_scroll["canvasSize"] = (-1.35, -0.60, -total_h, 0)
-
     # ── Event handlers ───────────────────────────────────────────────
 
     def _on_core_damaged(self, hp: int, max_hp: int) -> None:
@@ -500,23 +426,16 @@ class HUD:
     def _on_recipe_discovered(self, recipe: str, total: int, **kwargs) -> None:
         self._show_error(f"Recipe discovered: {recipe}!", color=(0.4, 0.9, 0.4, 1))
 
-    def _refresh_hand(self) -> None:
-        """Update the bag button text and refresh inventory panel if visible."""
-        ms = self.game_state.move_system
-        if ms is None or not ms.held_materials:
-            self.bag_btn["text"] = "Bag: 0"
-        else:
-            total = sum(ms.held_materials.values())
-            self.bag_btn["text"] = f"Bag: {total}"
-        if self._bag_panel_visible:
-            self._refresh_bag_panel()
-
     def _update_spawn_buttons(self) -> None:
-        """Show spawn buttons only in dev mode."""
+        """Show debug buttons only in dev mode."""
         if _cfg.DEV_MODE:
             self.spawn_surface_btn.show()
+            self.spawn_single_btn.show()
+            self.kill_all_btn.show()
         else:
             self.spawn_surface_btn.hide()
+            self.spawn_single_btn.hide()
+            self.kill_all_btn.hide()
 
     def _on_dev_mode_changed(self, **kwargs) -> None:
         self._update_spawn_buttons()
@@ -619,11 +538,17 @@ class HUD:
         self.tool_label["text_fg"] = _sty.CRAFT_STATUS_COLOR
 
     def _on_craft_hover_valid(
-        self, x: int, y: int, z: int, recipe_name: str = "", **kwargs,
+        self, x: int, y: int, z: int, recipe_name: str = "",
+        behavior_hint: str = "", mana_cost: int = 0, **kwargs,
     ) -> None:
-        """Show green hover text for a valid craft position."""
+        """Show green hover text with behavior hint and mana cost."""
         name = recipe_name or self._craft_recipe_name or "?"
-        self.hover_label["text"] = f"Click to craft {name} at ({x}, {y}, {-z})"
+        lines = [f"Click to craft {name} at ({x}, {y}, {-z})"]
+        if behavior_hint:
+            lines.append(behavior_hint)
+        if mana_cost > 0:
+            lines.append(f"Mana cost: {mana_cost}")
+        self.hover_label["text"] = "\n".join(lines)
         self.hover_label["text_fg"] = _sty.SUCCESS_COLOR
 
     def _on_craft_hover_invalid(self, x: int, y: int, z: int, **kwargs) -> None:

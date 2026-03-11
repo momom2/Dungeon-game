@@ -15,9 +15,8 @@ import dungeon_builder.config as _cfg
 # ── Difficulty settings ──────────────────────────────────────────────────
 
 DIFFICULTY_SETTINGS: list[dict] = [
-    {"attr": "INTRUDER_DEFAULT_HP",           "label": "Intruder HP",          "min": 10,   "max": 200,  "step": 5,    "type": int},
-    {"attr": "INTRUDER_DEFAULT_DAMAGE",       "label": "Intruder Damage",      "min": 1,    "max": 50,   "step": 1,    "type": int},
-    {"attr": "INTRUDER_SPAWN_INTERVAL",       "label": "Spawn Interval",       "min": 50,   "max": 1000, "step": 10,   "type": int},
+    {"attr": "INTRUDER_HP_MULTIPLIER",        "label": "HP Multiplier",        "min": 0.25, "max": 4.0,  "step": 0.25, "type": float},
+    {"attr": "INTRUDER_DAMAGE_MULTIPLIER",    "label": "Damage Multiplier",    "min": 0.25, "max": 4.0,  "step": 0.25, "type": float},
     {"attr": "INTRUDER_PARTY_SPAWN_INTERVAL", "label": "Party Spawn Interval", "min": 100,  "max": 2000, "step": 20,   "type": int},
     {"attr": "MAX_PARTIES",                   "label": "Max Parties",          "min": 1,    "max": 10,   "step": 1,    "type": int},
     {"attr": "MAX_INTRUDERS_TOTAL",           "label": "Max Intruders",        "min": 4,    "max": 64,   "step": 2,    "type": int},

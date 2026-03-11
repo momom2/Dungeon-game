@@ -384,6 +384,132 @@ class TestPhaseWalk:
         assert (0, 1, 0) not in path
 
 
+class TestPhaseWalkDualCost:
+    """Test dual-cost augmented-state A* for phase-walk.
+
+    The wall budget is a hard constraint (not a heuristic cost).  The wall
+    counter resets on entering walkable cells and blocks when exceeding
+    phase_thickness.
+    """
+
+    def test_wall_budget_exact_match(self):
+        """Eidolon (phase_thickness=2) can phase through exactly 2 wall cells."""
+        pm = PersonalMap()
+        pm.reveal(0, 0, 0, VOXEL_AIR)
+        pm.reveal(0, 1, 0, VOXEL_STONE)
+        pm.reveal(0, 2, 0, VOXEL_STONE)
+        pm.reveal(0, 3, 0, VOXEL_AIR)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 3, 0), EIDOLON)
+        assert path is not None
+        assert path[-1] == (0, 3, 0)
+
+    def test_wall_budget_exceeded(self):
+        """Eidolon cannot phase through 3 consecutive walls (budget is 2)."""
+        pm = PersonalMap()
+        pm.reveal(0, 0, 0, VOXEL_AIR)
+        pm.reveal(0, 1, 0, VOXEL_STONE)
+        pm.reveal(0, 2, 0, VOXEL_STONE)
+        pm.reveal(0, 3, 0, VOXEL_STONE)
+        pm.reveal(0, 4, 0, VOXEL_AIR)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 4, 0), EIDOLON)
+        assert path is None
+
+    def test_wall_counter_resets_at_air(self):
+        """Wall counter resets to 0 when entering air, allowing multiple phases."""
+        pm = PersonalMap()
+        # Wall(1) -> Air -> Wall(1) -> Air: two separate 1-thick walls
+        pm.reveal(0, 0, 0, VOXEL_AIR)
+        pm.reveal(0, 1, 0, VOXEL_STONE)
+        pm.reveal(0, 2, 0, VOXEL_AIR)
+        pm.reveal(0, 3, 0, VOXEL_STONE)
+        pm.reveal(0, 4, 0, VOXEL_AIR)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 4, 0), EIDOLON)
+        assert path is not None
+        assert path[-1] == (0, 4, 0)
+
+    def test_reinforced_wall_blocks_phase(self):
+        """Phase-walkers cannot phase through reinforced walls regardless of budget."""
+        pm = PersonalMap()
+        pm.reveal(0, 0, 0, VOXEL_AIR)
+        pm.reveal(0, 1, 0, VOXEL_REINFORCED_WALL)
+        pm.reveal(0, 2, 0, VOXEL_AIR)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), EIDOLON)
+        assert path is None
+
+    def test_bedrock_blocks_phase(self):
+        """Phase-walkers cannot phase through bedrock."""
+        pm = PersonalMap()
+        pm.reveal(0, 0, 0, VOXEL_AIR)
+        pm.reveal(0, 1, 0, VOXEL_BEDROCK)
+        pm.reveal(0, 2, 0, VOXEL_AIR)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), EIDOLON)
+        assert path is None
+
+    def test_water_blocks_phase(self):
+        """Phase-walkers cannot phase through water."""
+        pm = PersonalMap()
+        pm.reveal(0, 0, 0, VOXEL_AIR)
+        pm.reveal(0, 1, 0, VOXEL_WATER)
+        pm.reveal(0, 2, 0, VOXEL_AIR)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), EIDOLON)
+        assert path is None
+
+    def test_iron_bars_block_phase(self):
+        """Phase-walkers cannot phase through iron bars."""
+        pm = PersonalMap()
+        pm.reveal(0, 0, 0, VOXEL_AIR)
+        pm.reveal(0, 1, 0, VOXEL_IRON_BARS)
+        pm.reveal(0, 2, 0, VOXEL_AIR)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), EIDOLON)
+        assert path is None
+
+    def test_custom_phase_thickness_1(self):
+        """Custom archetype with phase_thickness=1 can only do 1 wall cell."""
+        phase1 = replace(EIDOLON, phase_thickness=1)
+        pm = PersonalMap()
+        pm.reveal(0, 0, 0, VOXEL_AIR)
+        pm.reveal(0, 1, 0, VOXEL_STONE)
+        pm.reveal(0, 2, 0, VOXEL_AIR)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), phase1)
+        assert path is not None
+
+        # But 2 consecutive walls should fail
+        pm2 = PersonalMap()
+        pm2.reveal(0, 0, 0, VOXEL_AIR)
+        pm2.reveal(0, 1, 0, VOXEL_STONE)
+        pm2.reveal(0, 2, 0, VOXEL_STONE)
+        pm2.reveal(0, 3, 0, VOXEL_AIR)
+        path2 = PersonalPathfinder.find_path(pm2, (0, 0, 0), (0, 3, 0), phase1)
+        assert path2 is None
+
+    def test_phase_path_includes_wall_cells(self):
+        """Phase path should include the wall cells traversed."""
+        pm = PersonalMap()
+        pm.reveal(0, 0, 0, VOXEL_AIR)
+        pm.reveal(0, 1, 0, VOXEL_STONE)
+        pm.reveal(0, 2, 0, VOXEL_AIR)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 2, 0), EIDOLON)
+        assert path is not None
+        # Path should be: air -> wall -> air
+        assert (0, 1, 0) in path
+
+    def test_phase_route_through_gap_in_thick_wall(self):
+        """When a thick wall has a gap (air cell), phase-walker should use it
+        to reset the wall counter and traverse a longer wall section."""
+        pm = PersonalMap()
+        # Layout: AIR - STONE - AIR - STONE - AIR
+        # Two 1-thick walls separated by air gap: traversable even with budget 2
+        pm.reveal(0, 0, 0, VOXEL_AIR)
+        pm.reveal(0, 1, 0, VOXEL_STONE)
+        pm.reveal(0, 2, 0, VOXEL_AIR)   # Gap resets counter
+        pm.reveal(0, 3, 0, VOXEL_STONE)
+        pm.reveal(0, 4, 0, VOXEL_AIR)
+        phase1 = replace(EIDOLON, phase_thickness=1)
+        path = PersonalPathfinder.find_path(pm, (0, 0, 0), (0, 4, 0), phase1)
+        assert path is not None
+        assert (0, 2, 0) in path  # Must go through the gap
+
+
 # ── Max iterations ──────────────────────────────────────────────────
 
 

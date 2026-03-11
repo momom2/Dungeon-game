@@ -5,7 +5,7 @@ simultaneously with no limit on quantity.
 
 Dependencies: config, core.event_bus, core.game_state, world.voxel_grid
 Dependents: main (wiring), building.crafting_system, core.game_state,
-    ui.crafting_book_panel, tests/building/
+    ui.object_palette, tests/building/
 """
 
 from __future__ import annotations

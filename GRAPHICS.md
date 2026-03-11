@@ -252,11 +252,13 @@ helps readability against the dark UI.
 
 ### 4c. Intruder Character Art
 
+(Stubbed. A collaborator will contribute art which you will then integrate with the rest of the game.)
+
 **What:** Visual representations of the 8+ intruder archetypes (currently
 rendered as solid-colored 0.6-unit cubes). See Section 10 for the full
 archetype list with colors and personality descriptions.
 
-**Three viable approaches** — create prototypes and we'll decide:
+**Three viable approaches:** 
 
 #### Option A: Billboarded Sprites
 2D sprite sheets that always face the camera (classic Doom/early-RTS
@@ -287,22 +289,7 @@ animation but requires 3D modeling skills.
 
 #### Archetype Visual Identity
 
-Each archetype should have a **silhouette** distinct enough to identify at
-distance. Color alone isn't sufficient — the shapes/outfits should differ:
-
-| Archetype    | Personality                     | Visual Direction               |
-|--------------|----------------------------------|--------------------------------|
-| Explorer     | Stealthy scout, treasure hunter | Hooded cloak, lockpicks, light |
-| Inquisitor   | Armored crusader, siege leader  | Heavy plate, shield, hammer    |
-| Gloomwarden  | Torch-bearing ranger, support   | Lantern/torch, light armor     |
-| Mole Tamer   | Beast handler, tunnel specialist| Earthy robes, mole companions  |
-| Eidolon      | Supernatural, phases through walls | Violet ethereal glow, floating |
-| Alchemist    | Chemical brewer, potion expert  | Goggles, bandolier of bottles  |
-| Cartomancer  | Scroll mage, teleporter        | Deep-blue robes, scroll case   |
-| Hero         | Legendary champion, unstoppable | Gold armor, dramatic presence  |
-
-Underworld variants (Magmawraith, Crystalweaver, etc.) should look darker
-and more alien — subterranean creatures rather than surface adventurers.
+(Deprecated, needs to be updated.)
 
 ### 4d. Menu Art & Logo
 

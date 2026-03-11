@@ -169,6 +169,22 @@ class TestCraftHoverVisuals:
         assert hasattr(EffectsRenderer, "_hide_ghost_preview")
         assert callable(getattr(EffectsRenderer, "_hide_ghost_preview"))
 
+    def test_show_radius_preview_exists(self):
+        from dungeon_builder.rendering.effects import EffectsRenderer
+        assert hasattr(EffectsRenderer, "_show_radius_preview")
+        assert callable(getattr(EffectsRenderer, "_show_radius_preview"))
+
+    def test_hide_radius_preview_exists(self):
+        from dungeon_builder.rendering.effects import EffectsRenderer
+        assert hasattr(EffectsRenderer, "_hide_radius_preview")
+        assert callable(getattr(EffectsRenderer, "_hide_radius_preview"))
+
+    def test_craft_hover_valid_accepts_effect_radius(self):
+        """_on_craft_hover_valid signature includes effect_radius."""
+        from dungeon_builder.rendering.effects import EffectsRenderer
+        sig = inspect.signature(EffectsRenderer._on_craft_hover_valid)
+        assert "effect_radius" in sig.parameters
+
 
 class TestCraftConfigConstants:
     """Config constants for craft visual feedback exist with valid values."""
@@ -192,3 +208,60 @@ class TestCraftConfigConstants:
         assert len(CRAFT_FLASH_COLOR) == 4
         for c in CRAFT_FLASH_COLOR:
             assert 0.0 <= c <= 1.0
+
+    def test_craft_radius_color(self):
+        from dungeon_builder.config import CRAFT_RADIUS_COLOR
+        assert len(CRAFT_RADIUS_COLOR) == 4
+        for c in CRAFT_RADIUS_COLOR:
+            assert 0.0 <= c <= 1.0
+
+
+class TestConnectionVisualization:
+    """EffectsRenderer has connection rendering infrastructure."""
+
+    def test_on_block_selected_handler_exists(self):
+        from dungeon_builder.rendering.effects import EffectsRenderer
+        assert hasattr(EffectsRenderer, "_on_block_selected")
+        assert callable(getattr(EffectsRenderer, "_on_block_selected"))
+
+    def test_on_block_deselected_handler_exists(self):
+        from dungeon_builder.rendering.effects import EffectsRenderer
+        assert hasattr(EffectsRenderer, "_on_block_deselected")
+        assert callable(getattr(EffectsRenderer, "_on_block_deselected"))
+
+    def test_show_connections_method_exists(self):
+        from dungeon_builder.rendering.effects import EffectsRenderer
+        assert hasattr(EffectsRenderer, "_show_connections")
+        assert callable(getattr(EffectsRenderer, "_show_connections"))
+
+    def test_hide_connections_method_exists(self):
+        from dungeon_builder.rendering.effects import EffectsRenderer
+        assert hasattr(EffectsRenderer, "_hide_connections")
+        assert callable(getattr(EffectsRenderer, "_hide_connections"))
+
+    def test_render_mode_connections_handler_exists(self):
+        from dungeon_builder.rendering.effects import EffectsRenderer
+        assert hasattr(EffectsRenderer, "_on_render_mode_connections")
+        assert callable(getattr(EffectsRenderer, "_on_render_mode_connections"))
+
+
+class TestConnectionConfigConstants:
+    """Connection color constants exist with valid RGBA values."""
+
+    def test_connection_colors_dict(self):
+        from dungeon_builder.config import CONNECTION_COLORS
+        assert "trigger" in CONNECTION_COLORS
+        assert "flow" in CONNECTION_COLORS
+        assert "thermal" in CONNECTION_COLORS
+        assert "structural" in CONNECTION_COLORS
+
+    def test_connection_colors_valid_rgba(self):
+        from dungeon_builder.config import CONNECTION_COLORS
+        for conn_type, color in CONNECTION_COLORS.items():
+            assert len(color) == 4, f"{conn_type}: expected 4 components"
+            for i, c in enumerate(color):
+                assert 0.0 <= c <= 1.0, f"{conn_type}[{i}]={c} out of range"
+
+    def test_render_mode_connections_constant(self):
+        from dungeon_builder.config import RENDER_MODE_CONNECTIONS
+        assert RENDER_MODE_CONNECTIONS == "connections"

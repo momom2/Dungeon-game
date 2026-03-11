@@ -11,7 +11,7 @@ Each save file is a zip archive containing:
 - parties.json: Party composition linked by intruder id
 - core.json: DungeonCore HP/position
 - intruder_ai.json: Spawn counters and flags
-- mana.json: Mana pool state (mana, max_mana, souls)
+- mana.json: Mana pool state (mana, max_mana, souls, per-block activation/charge)
 
 Dependencies: config, intruders.personal_map, intruders.agent,
     intruders.archetypes, intruders.equipment, intruders.familiar,
@@ -390,6 +390,10 @@ class SaveData:
     max_mana: float = 1000.0
     souls: int = 0
 
+    # Per-block enchanted state (keys are (x,y,z) tuples)
+    block_activated: dict[tuple[int, int, int], bool] = field(default_factory=dict)
+    block_charge_mode: dict[tuple[int, int, int], str] = field(default_factory=dict)
+
 
 # ── Save ──────────────────────────────────────────────────────────────
 
@@ -519,10 +523,18 @@ class SaveSystem:
             # 10. Mana system
             mana_system = game_state.mana_system
             if mana_system is not None:
-                mana_data = {
+                mana_data: dict[str, Any] = {
                     "mana": mana_system.mana,
                     "max_mana": mana_system.max_mana,
                     "souls": mana_system.souls,
+                    "block_activated": {
+                        _pos_to_str(k): v
+                        for k, v in mana_system._activated.items()
+                    },
+                    "block_charge_mode": {
+                        _pos_to_str(k): v
+                        for k, v in mana_system._charge_mode.items()
+                    },
                 }
                 zf.writestr("mana.json", json.dumps(mana_data, indent=2))
 
@@ -625,6 +637,14 @@ class SaveSystem:
                     sd.mana = mana.get("mana", 0.0)
                     sd.max_mana = mana.get("max_mana", 1000.0)
                     sd.souls = mana.get("souls", 0)
+                    sd.block_activated = {
+                        _str_to_pos(k): v
+                        for k, v in mana.get("block_activated", {}).items()
+                    }
+                    sd.block_charge_mode = {
+                        _str_to_pos(k): v
+                        for k, v in mana.get("block_charge_mode", {}).items()
+                    }
 
             logger.info("Game loaded from %s (tick %d)", path, sd.tick_count)
             return sd
@@ -740,6 +760,15 @@ class SaveSystem:
             mana_system.max_mana = sd.max_mana
             mana_system.souls = sd.souls
             mana_system.recount_traps()
+            # Override per-block activation/charge state from save
+            if sd.block_activated:
+                for pos, active in sd.block_activated.items():
+                    if pos in mana_system._activated:
+                        mana_system._activated[pos] = active
+            if sd.block_charge_mode:
+                for pos, mode in sd.block_charge_mode.items():
+                    if pos in mana_system._charge_mode:
+                        mana_system._charge_mode[pos] = mode
 
         logger.info("Save data applied (tick %d, %d intruders, %d parties)",
                      sd.tick_count, len(sd.intruders),

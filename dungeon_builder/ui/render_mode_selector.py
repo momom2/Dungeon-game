@@ -19,6 +19,7 @@ from dungeon_builder.config import (
     RENDER_MODE_HEAT,
     RENDER_MODE_STRUCTURAL,
     RENDER_MODE_PROSPECTING,
+    RENDER_MODE_CONNECTIONS,
 )
 
 if TYPE_CHECKING:
@@ -28,8 +29,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("dungeon_builder.render_mode")
 
-_MODES = [RENDER_MODE_MATTER, RENDER_MODE_HUMIDITY, RENDER_MODE_HEAT, RENDER_MODE_STRUCTURAL, RENDER_MODE_PROSPECTING]
-_LABELS = {"matter": "Matter", "humidity": "Humidity", "heat": "Heat", "structural": "Structural", "prospecting": "Prospecting"}
+_MODES = [RENDER_MODE_MATTER, RENDER_MODE_HUMIDITY, RENDER_MODE_HEAT, RENDER_MODE_STRUCTURAL, RENDER_MODE_PROSPECTING, RENDER_MODE_CONNECTIONS]
+_LABELS = {"matter": "Matter", "humidity": "Humidity", "heat": "Heat", "structural": "Structural", "prospecting": "Prospecting", "connections": "Connections"}
 
 
 class RenderModeSelector:

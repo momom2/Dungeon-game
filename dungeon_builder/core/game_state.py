@@ -2,7 +2,7 @@
 
 Dependencies: (none at runtime — TYPE_CHECKING only)
 Dependents: main, building.build_system, building.move_system, building.crafting_system,
-    rendering.camera, ui.hud, ui.main_menu, ui.crafting_book_panel,
+    rendering.camera, ui.hud, ui.main_menu, ui.object_palette,
     tests/building/, tests/core/test_game_state.py
 """
 
@@ -46,3 +46,6 @@ class GameState:
         self.menu_open: bool = True  # True at startup (main menu showing)
         self.craft_mode_active: bool = False  # True when player selected a recipe to place
         self.dev_mode: bool = True  # Starts in dev mode (toggleable in Options)
+
+        # Currently selected enchanted block (None if nothing selected)
+        self.selected_block: tuple[int, int, int] | None = None

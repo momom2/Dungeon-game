@@ -4,11 +4,14 @@ Dependencies: (none — pure data module)
 Dependents: config.__init__, intruders.*, ui.options_panel
 """
 
-# ── Intruder base defaults (used by Options menu sliders) ────────────
+# ── Intruder global multipliers (applied to archetype base stats) ────
+# Adjustable via Options menu sliders to scale difficulty.
 
-INTRUDER_DEFAULT_HP = 50
-INTRUDER_DEFAULT_DAMAGE = 5
-INTRUDER_SPAWN_INTERVAL = 200     # Ticks between spawns (10 seconds)
+INTRUDER_HP_MULTIPLIER = 1.0       # Applied to archetype base HP
+INTRUDER_DAMAGE_MULTIPLIER = 1.0   # Applied to archetype base damage
+# INTRUDER_SPAWN_INTERVAL: Stubbed — automatic spawning will be
+# overhauled when intruder society is implemented.  Currently,
+# INTRUDER_PARTY_SPAWN_INTERVAL (below) controls party spawn timing.
 
 # ── Party spawning ───────────────────────────────────────────────────
 
@@ -70,12 +73,29 @@ FAMILIAR_UNRULINESS_PER_DIG = 0.1     # Unruliness increase per completed dig
 FAMILIAR_UNRULY_THRESHOLD = 0.7       # Above this: familiar goes unruly
 FAMILIAR_MOVE_INTERVAL = 4            # Ticks between familiar moves
 
+# ── Mole Tamer commanding ─────────────────────────────────────────────
+
+TAMER_COMMAND_INTERVAL = 10           # Ticks between command decisions
+TAMER_DIG_LOOKAHEAD = 3               # Path steps ahead to scan for diggables
+TAMER_MAX_FAMILIAR_DISTANCE = 8       # Recall familiars beyond this (Manhattan)
+
 # ── Eidolon ──────────────────────────────────────────────────────────
 
 EIDOLON_ENTERTAINMENT_DECAY = 0.002   # Entertainment lost per tick
 EIDOLON_BOREDOM_THRESHOLD = 0.3       # Below this: eidolon becomes destructive
 EIDOLON_GIFT_THRESHOLD = 0.8          # Above this: eidolon bestows a gift
 EIDOLON_PHASE_THICKNESS = 2           # Max wall thickness to phase through
+
+# ── Sprites (Eidolon familiars) ────────────────────────────────────────
+
+SPRITE_HP = 5                          # Very fragile
+SPRITE_MOVE_INTERVAL = 2              # Ticks between moves (faster than moles)
+SPRITE_INSPECTION_LIMIT = 15          # Inspections before harmless dissipation
+SPRITE_BURST_RADIUS = 3              # Explosion sphere radius (set blocks loose)
+SPRITE_SUMMON_COOLDOWN = 100          # Ticks before eidolon can summon new sprites
+EIDOLON_SPRITE_CAPACITY = 2          # Max sprites per eidolon
+SPRITE_MEMORY_RANGE = 4              # Manhattan range for target searching
+SPRITE_PARTNER_SAFE_DISTANCE = 5     # Don't burst sprites within this of partner
 
 # ── Alchemist ────────────────────────────────────────────────────────
 

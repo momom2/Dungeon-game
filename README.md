@@ -1,6 +1,8 @@
 On Windows, use
 python.exe -m dungeon_builder.main
 to start the game.
+python.exe -m prototype
+to launch the MVP
 
 Early prototype of a dungeon builder game.
 Project: 
@@ -9,7 +11,7 @@ Project:
 3) Off-screen social dynamics to manipulate that determine the long-term well-being of your dungeon. 
 4) Magic system in three parts: spatiomancy, psychokinesis and teleology.
 
-Current focus: Improving visibility and playability of sandbox/no intruder mode. Quality of life features, bugfixes and content expansion for crafting and building.
+Current focus: Improving visibility and playability of dev mode. Quality of life features, bugfixes and content expansion for crafting and building.
 
 Vibe-coded with the help of Claude Opus 4.6.
 Author: Amaury Lorin

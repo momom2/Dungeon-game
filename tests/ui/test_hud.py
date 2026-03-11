@@ -284,6 +284,18 @@ class TestCraftModeHUD:
         assert hasattr(HUD, "_update_craft_tool_label")
         assert callable(getattr(HUD, "_update_craft_tool_label"))
 
+    def test_craft_hover_valid_accepts_behavior_hint(self):
+        """_on_craft_hover_valid signature includes behavior_hint kwarg."""
+        from dungeon_builder.ui.hud import HUD
+        sig = inspect.signature(HUD._on_craft_hover_valid)
+        assert "behavior_hint" in sig.parameters
+
+    def test_craft_hover_valid_accepts_mana_cost(self):
+        """_on_craft_hover_valid signature includes mana_cost kwarg."""
+        from dungeon_builder.ui.hud import HUD
+        sig = inspect.signature(HUD._on_craft_hover_valid)
+        assert "mana_cost" in sig.parameters
+
     def test_craft_status_color_in_style(self):
         from dungeon_builder.ui.style import CRAFT_STATUS_COLOR
         assert len(CRAFT_STATUS_COLOR) == 4

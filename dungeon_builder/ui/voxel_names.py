@@ -1,7 +1,7 @@
 """Human-readable names for voxel types.
 
 Dependencies: (none — pure data module)
-Dependents: ui.hud, ui.crafting_book_panel
+Dependents: ui.hud, ui.object_palette
 """
 
 from __future__ import annotations

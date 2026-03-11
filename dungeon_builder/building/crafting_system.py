@@ -8,8 +8,8 @@ Flow:
 5. System executes the recipe, consumes material, re-scans highlights
 6. Player cancels (ESC/right-click) or runs out of material -> exit craft mode
 
-Dependencies: building.crafting_book, config, core.event_bus, core.game_state,
-    world.voxel_grid, building.move_system, dungeon_core.mana
+Dependencies: building.crafting_book, building.craft_cost, core.event_bus,
+    core.game_state, world.voxel_grid, building.move_system, dungeon_core.mana
 Dependents: main (wiring), tests/building/test_crafting.py,
     tests/building/test_block_state.py, tests/building/test_metal_type_system.py
 """
@@ -19,8 +19,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from dungeon_builder.building.craft_cost import CraftCost, compute_craft_cost
 from dungeon_builder.building.crafting_book import CraftingBook, CraftingRecipe
-from dungeon_builder.config import VOXEL_ENCHANTED_METAL, ENCHANTED_OFFSET
 
 if TYPE_CHECKING:
     from dungeon_builder.core.event_bus import EventBus
@@ -39,9 +39,13 @@ class CraftingSystem:
     panel -> highlight -> click workflow.  Provides hover feedback,
     ghost preview data, remaining-material counts, and placement flash.
 
-    When a recipe has ``mana_cost > 0`` and the player holds regular metal
-    (not enchanted), the system deducts mana and applies the enchanted
-    offset to the metal type automatically.
+    Crafting uses a mana-or-materials dual cost model:
+
+    - Each recipe has an *assembly cost* (irreducible mana) and a list
+      of ingredients with individual *mana values*.
+    - Holding a matching material offsets that ingredient's mana cost.
+    - Missing substitutable ingredients are conjured with mana.
+    - Non-substitutable ingredients must be held physically.
     """
 
     def __init__(
@@ -77,12 +81,49 @@ class CraftingSystem:
         """Return True if a recipe is selected and highlights are showing."""
         return self._active_recipe is not None
 
+    # ── Cost helpers ──────────────────────────────────────────────────
+
+    def _current_cost(self, recipe: CraftingRecipe) -> CraftCost:
+        """Compute craft cost against the player's current inventory."""
+        return compute_craft_cost(
+            recipe.ingredients,
+            recipe.assembly_cost,
+            self.move_system.held_materials,
+        )
+
+    def _can_afford_mana(self, cost: CraftCost) -> bool:
+        """Return True if the player can pay *cost.total* mana (or free)."""
+        if cost.total == 0:
+            return True
+        return (
+            self.mana_system is not None
+            and self.mana_system.can_spend(cost.total)
+        )
+
+    def _resolve_held_type(self, recipe: CraftingRecipe) -> int | None:
+        """Pick a held_type for the recipe, or None if uncraftable.
+
+        Prefers a physical material from inventory.  Falls back to the
+        recipe's canonical ingredient type for mana-only crafting.
+        """
+        held_keys = set(self.move_system.held_materials.keys())
+        matching = held_keys & recipe.required_inputs
+        if matching:
+            return next(iter(matching))
+        # Mana-only fallback: use canonical ingredient type.
+        if recipe.ingredients:
+            return recipe.ingredients[0].vtype
+        return None
+
     # ── Recipe selection ─────────────────────────────────────────────
 
     def _on_recipe_selected(self, recipe_name: str, **kw) -> None:
         """Player clicked a recipe in the panel."""
         # If already in craft mode for this recipe, toggle it off
-        if self._active_recipe is not None and self._active_recipe.name == recipe_name:
+        if (
+            self._active_recipe is not None
+            and self._active_recipe.name == recipe_name
+        ):
             self._exit_craft_mode()
             return
 
@@ -91,17 +132,27 @@ class CraftingSystem:
             logger.warning("Unknown recipe: %s", recipe_name)
             return
 
-        # Find a matching held type
-        held_keys = set(self.move_system.held_materials.keys())
-        matching = held_keys & recipe.required_inputs
-        if not matching:
+        cost = self._current_cost(recipe)
+
+        if not cost.craftable:
             self.event_bus.publish(
                 "error_message", text="Missing required material"
             )
             return
 
-        # Pick the first matching held type
-        held_type = next(iter(matching))
+        if not self._can_afford_mana(cost):
+            self.event_bus.publish(
+                "error_message",
+                text=f"Not enough mana ({cost.total})",
+            )
+            return
+
+        held_type = self._resolve_held_type(recipe)
+        if held_type is None:
+            self.event_bus.publish(
+                "error_message", text="Missing required material"
+            )
+            return
 
         self._active_recipe = recipe
         self._active_held_type = held_type
@@ -124,31 +175,20 @@ class CraftingSystem:
     # ── Position scanning ────────────────────────────────────────────
 
     def _scan_and_highlight(self, z_level: int) -> None:
-        """Find all valid craft positions at z_level and publish highlights.
-
-        When a recipe has a mana cost and the held type is regular metal,
-        positions are only highlighted if the player can afford the mana.
-        """
+        """Find all valid craft positions at z_level and publish highlights."""
         if self._active_recipe is None or self._active_held_type is None:
             return
 
-        # Check mana affordability for mana-cost recipes with regular metal
-        is_mana_powered = (
-            self._active_recipe.mana_cost > 0
-            and self._active_held_type != VOXEL_ENCHANTED_METAL
-        )
-        if is_mana_powered:
-            if (
-                self.mana_system is None
-                or not self.mana_system.can_spend(self._active_recipe.mana_cost)
-            ):
-                # Can't afford — no highlights
-                self._highlighted_positions = set()
-                self.event_bus.publish(
-                    "craft_highlights_updated",
-                    positions=self._highlighted_positions,
-                )
-                return
+        cost = self._current_cost(self._active_recipe)
+
+        if not cost.craftable or not self._can_afford_mana(cost):
+            # Can't afford or missing non-substitutable material
+            self._highlighted_positions = set()
+            self.event_bus.publish(
+                "craft_highlights_updated",
+                positions=self._highlighted_positions,
+            )
+            return
 
         positions = self.crafting_book.find_valid_positions(
             self._active_recipe, self.voxel_grid, self._active_held_type,
@@ -169,11 +209,15 @@ class CraftingSystem:
             return
 
         if (x, y, z) in self._highlighted_positions:
+            cost = self._current_cost(self._active_recipe)
             self.event_bus.publish(
                 "craft_hover_valid",
                 x=x, y=y, z=z,
                 recipe_name=self._active_recipe.name,
                 output_vtype=self._active_recipe.output_vtype,
+                effect_radius=self._active_recipe.effect_radius,
+                behavior_hint=self._active_recipe.behavior_hint,
+                mana_cost=cost.total,
             )
         else:
             self.event_bus.publish(
@@ -202,27 +246,24 @@ class CraftingSystem:
         recipe = self._active_recipe
         held_type = self._active_held_type
 
-        # Determine if this is a mana-powered craft
-        is_mana_powered = (
-            recipe.mana_cost > 0
-            and held_type != VOXEL_ENCHANTED_METAL
-        )
+        # Recompute cost (inventory may have changed since scan)
+        cost = self._current_cost(recipe)
 
-        # Check mana BEFORE executing the craft
-        if is_mana_powered:
-            if self.mana_system is None or not self.mana_system.can_spend(recipe.mana_cost):
-                self.event_bus.publish(
-                    "error_message",
-                    text=f"Not enough mana ({recipe.mana_cost})",
-                )
-                return
+        if not cost.craftable:
+            self.event_bus.publish(
+                "error_message", text="Missing required material"
+            )
+            return
 
-        # Execute the recipe, passing held metal_type if available
+        if not self._can_afford_mana(cost):
+            self.event_bus.publish(
+                "error_message",
+                text=f"Not enough mana ({cost.total})",
+            )
+            return
+
+        # Execute the recipe — craft_fns handle enchanted offset
         held_metal = self.move_system.get_held_metal_type(held_type)
-        # For mana-powered crafts, apply enchanted offset to the metal
-        if is_mana_powered and held_metal is not None:
-            held_metal = held_metal | ENCHANTED_OFFSET
-
         success = recipe.craft_fn(
             self.voxel_grid, x, y, z, held_type, self.event_bus,
             held_metal=held_metal,
@@ -233,33 +274,41 @@ class CraftingSystem:
             )
             return
 
-        # Deduct mana for mana-powered crafts
-        if is_mana_powered:
-            self.mana_system.spend(recipe.mana_cost)
+        # Deduct mana
+        if cost.total > 0:
+            self.mana_system.spend(cost.total)
 
-        # Consume one unit of material
-        self.move_system.consume(held_type, 1)
+        # Consume materials
+        for vtype, count in cost.materials_consumed.items():
+            self.move_system.consume(vtype, count)
 
         self.event_bus.publish(
             "craft_success",
-            recipe=self._active_recipe.name,
+            recipe=recipe.name,
             x=x, y=y, z=z,
         )
-        # Placement flash at the crafted position
         self.event_bus.publish(
             "craft_placement_flash", x=x, y=y, z=z,
         )
         logger.info(
-            "Crafted '%s' at (%d, %d, %d)", self._active_recipe.name, x, y, z
+            "Crafted '%s' at (%d, %d, %d)", recipe.name, x, y, z
         )
 
-        # Check if material is depleted
-        if not self.move_system.has_material(self._active_held_type):
+        # Re-determine held_type and check if we can keep crafting
+        new_held = self._resolve_held_type(recipe)
+        new_cost = self._current_cost(recipe)
+
+        if (
+            new_held is None
+            or not new_cost.craftable
+            or not self._can_afford_mana(new_cost)
+        ):
             self._exit_craft_mode()
             return
 
-        # Re-scan highlights (crafted position may no longer be valid,
-        # other positions may open up)
+        self._active_held_type = new_held
+
+        # Re-scan highlights
         self._scan_and_highlight(self._current_z)
 
         # Update remaining count after consumption
@@ -268,15 +317,38 @@ class CraftingSystem:
     # ── Remaining count ──────────────────────────────────────────────
 
     def _publish_remaining_count(self) -> None:
-        """Publish the remaining material count for the active recipe."""
+        """Publish the remaining craft count for the active recipe."""
         if self._active_recipe is None or self._active_held_type is None:
             return
-        remaining = self.move_system.get_count(self._active_held_type)
+
+        cost = self._current_cost(self._active_recipe)
+        remaining = self._remaining_crafts(cost)
+
         self.event_bus.publish(
             "craft_remaining_updated",
             recipe_name=self._active_recipe.name,
             remaining=remaining,
         )
+
+    def _remaining_crafts(self, cost: CraftCost) -> int:
+        """How many more times the player can afford this recipe."""
+        remaining: float = float("inf")
+
+        # Limited by materials
+        for vtype, count in cost.materials_consumed.items():
+            available = self.move_system.get_count(vtype)
+            remaining = min(remaining, available // count)
+
+        # Limited by mana
+        if cost.total > 0:
+            if self.mana_system is not None:
+                remaining = min(
+                    remaining, self.mana_system.mana // cost.total
+                )
+            else:
+                remaining = 0
+
+        return 0 if remaining == float("inf") else int(remaining)
 
     # ── Cancellation ─────────────────────────────────────────────────
 

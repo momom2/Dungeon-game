@@ -106,6 +106,54 @@ class TestDebugSpawnViaEventBus:
         assert len(ai.parties) == 2
 
 
+# -- Test: Debug spawn single intruder --
+
+
+class TestDebugSpawnSingle:
+    """Publishing debug_spawn_single should create a single intruder."""
+
+    def test_debug_spawn_single_creates_one_intruder(self):
+        event_bus = EventBus()
+        grid = _make_grid_with_air_edges()
+        pathfinder = AStarPathfinder(grid)
+        core = DungeonCore(event_bus, CORE_X, CORE_Y, CORE_Z, hp=100)
+        rng = SeededRNG(42)
+        ai = IntruderAI(event_bus, grid, pathfinder, core, rng)
+
+        assert len(ai.intruders) == 0
+        event_bus.publish("debug_spawn_single")
+        assert len(ai.intruders) == 1
+
+    def test_debug_spawn_single_handler_exists(self):
+        assert hasattr(IntruderAI, "_on_debug_spawn_single")
+        assert callable(getattr(IntruderAI, "_on_debug_spawn_single"))
+
+
+# -- Test: Debug kill all --
+
+
+class TestDebugKillAll:
+    """Publishing debug_kill_all should kill all intruders."""
+
+    def test_debug_kill_all_clears_intruders(self):
+        event_bus = EventBus()
+        grid = _make_grid_with_air_edges()
+        pathfinder = AStarPathfinder(grid)
+        core = DungeonCore(event_bus, CORE_X, CORE_Y, CORE_Z, hp=100)
+        rng = SeededRNG(42)
+        ai = IntruderAI(event_bus, grid, pathfinder, core, rng)
+
+        event_bus.publish("debug_spawn_party")
+        assert len(ai.intruders) > 0
+
+        event_bus.publish("debug_kill_all")
+        assert all(not i.alive for i in ai.intruders) or len(ai.intruders) == 0
+
+    def test_debug_kill_all_handler_exists(self):
+        assert hasattr(IntruderAI, "_on_debug_kill_all")
+        assert callable(getattr(IntruderAI, "_on_debug_kill_all"))
+
+
 # -- Test: HUD has spawn buttons (interface checks) --
 
 

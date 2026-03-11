@@ -1,8 +1,8 @@
 """Shared UI style constants for consistent theming across all panels.
 
 Dependencies: (none — pure data module)
-Dependents: ui.main_menu, ui.hud, ui.crafting_book_panel,
-            ui.render_mode_selector
+Dependents: ui.main_menu, ui.hud, ui.object_palette,
+            ui.object_palette, ui.render_mode_selector
 """
 
 from __future__ import annotations
@@ -37,6 +37,14 @@ BUTTON_SIZE = (-0.3, 0.3, -0.045, 0.055)
 RECIPE_BG = (0.12, 0.12, 0.18, 0.7)      # Inactive recipe row
 RECIPE_BG_ENABLED = (0.12, 0.18, 0.12, 0.8)  # Recipe has required material
 RECIPE_BG_ACTIVE = (0.25, 0.22, 0.08, 0.9)   # Currently crafting this recipe
+
+# ── Object Palette ───────────────────────────────────────────────────────
+
+PALETTE_TAB_BG = (0.12, 0.12, 0.18, 0.7)      # Inactive category tab
+PALETTE_TAB_ACTIVE = (0.25, 0.22, 0.08, 0.9)  # Active category tab
+COST_AFFORDABLE = (0.3, 1.0, 0.3, 1)          # Green — has material
+COST_MANA_ONLY = (0.9, 0.8, 0.2, 1)           # Yellow — mana substitute
+COST_UNAFFORDABLE = (0.5, 0.3, 0.3, 1)        # Red-grey — cannot craft
 
 # ── Z-ordering ───────────────────────────────────────────────────────────
 

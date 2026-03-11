@@ -476,6 +476,29 @@ class CameraController:
         if grid is None:
             return
 
+        # Deselect any currently selected enchanted block
+        if self.game_state.selected_block is not None:
+            self.game_state.selected_block = None
+            self.event_bus.publish("enchanted_block_deselected")
+            self.event_bus.publish("block_deselected")
+
+        # Publish general block selection for connection visualization
+        vtype = grid.get(vx, vy, vz)
+        self.event_bus.publish(
+            "block_selected", x=vx, y=vy, z=vz, vtype=vtype,
+        )
+
+        # Select enchanted blocks instead of digging them
+        if (
+            vtype in _cfg.MAGICAL_TRAP_TYPES
+            and not grid.is_loose(vx, vy, vz)
+        ):
+            self.game_state.selected_block = (vx, vy, vz)
+            self.event_bus.publish(
+                "enchanted_block_selected", x=vx, y=vy, z=vz,
+            )
+            return
+
         # Auto-switch: determine mode from block state
         # Loose blocks → move; solid blocks → dig
         if grid.is_loose(vx, vy, vz):

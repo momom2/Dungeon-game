@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import dungeon_builder.config as _cfg
 
@@ -580,8 +580,15 @@ def _build_hero_loadout(
     equip.add_to_inventory(ItemInstance(POTION_HEAL))
 
 
+# Type alias for loadout builder functions
+_LoadoutBuilder = Callable[
+    ["Equipment", "ArchetypeStats", "SeededRNG", int, "IntruderStatus",
+     "DungeonReputation | None"],
+    None,
+]
+
 # Dispatch table: base_gear_loadout string → builder function
-_LOADOUT_BUILDERS: dict[str, type[None]] = {
+_LOADOUT_BUILDERS: dict[str, _LoadoutBuilder] = {
     "explorer": _build_explorer_loadout,
     "inquisitor": _build_inquisitor_loadout,
     "gloomwarden": _build_gloomwarden_loadout,

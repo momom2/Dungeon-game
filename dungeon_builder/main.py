@@ -9,7 +9,7 @@ instantiation line.  When disabling or refactoring a subsystem, update
   event_bus          → passed to every subsystem; game_state.event_bus
   rng                → GeologyGenerator, IntruderAI, _subsystems
   game_state         → camera_ctrl, hud, build_system, move_system,
-                       crafting_system, crafting_book_panel, main_menu,
+                       crafting_system, object_palette, main_menu,
                        _game_state, _save_game, _load_game
   voxel_grid         → game_state.voxel_grid, most subsystems, _subsystems,
                        _save_game, _load_game
@@ -20,9 +20,9 @@ instantiation line.  When disabling or refactoring a subsystem, update
   build_system       → game_state.build_system, world_renderer.build_system,
                        _subsystems, _save_game, _load_game
   move_system        → game_state.move_system, crafting_system,
-                       crafting_book_panel, _subsystems, _save_game, _load_game
+                       object_palette, _subsystems, _save_game, _load_game
   crafting_system    → crafting_journal, _subsystems
-  crafting_journal   → crafting_book_panel, _subsystems
+  crafting_journal   → object_palette, _subsystems
   temperature_physics→ _subsystems only (wired via event_bus)
   humidity_physics   → _subsystems only (wired via event_bus)
   pipe_physics       → _subsystems only (wired via event_bus)
@@ -36,7 +36,8 @@ instantiation line.  When disabling or refactoring a subsystem, update
   effects_renderer   → _subsystems only (explicit place_core_marker call)
   hud                → _subsystems only (wired via event_bus)
   render_mode_selector→ _subsystems only
-  crafting_book_panel→ _subsystems only
+  object_palette     → _subsystems only
+  enchanted_panel    → _subsystems only
   main_menu          → _subsystems only
 
   DISABLED:
@@ -104,8 +105,9 @@ from dungeon_builder.rendering.intruder_renderer import IntruderRenderer
 from dungeon_builder.rendering.effects import EffectsRenderer
 from dungeon_builder.ui.hud import HUD
 from dungeon_builder.ui.render_mode_selector import RenderModeSelector
-from dungeon_builder.ui.crafting_book_panel import CraftingBookPanel
+from dungeon_builder.ui.object_palette import ObjectPalette
 from dungeon_builder.ui.main_menu import MainMenu
+from dungeon_builder.ui.enchanted_panel import EnchantedBlockPanel
 from dungeon_builder.core.keybinding_registry import KeybindingRegistry
 from dungeon_builder.core.save_system import SaveSystem
 from dungeon_builder.utils.rng import SeededRNG
@@ -198,7 +200,10 @@ class DungeonApp(ShowBase):
         gravity_physics = GravityPhysics(event_bus, voxel_grid)
         structural_physics = StructuralIntegrityPhysics(event_bus, voxel_grid)
 
-        intruder_ai = IntruderAI(event_bus, voxel_grid, pathfinder, core, rng)
+        intruder_ai = IntruderAI(
+            event_bus, voxel_grid, pathfinder, core, rng,
+            mana_system=mana_system,
+        )
 
         # ── Pre-stabilize terrain ──
         # Run gravity + structural passes until the world stops changing.
@@ -255,11 +260,14 @@ class DungeonApp(ShowBase):
             self, event_bus, world_renderer,
             keybinding_registry=kb_registry,
         )
-        crafting_book_panel = CraftingBookPanel(
+        object_palette = ObjectPalette(
             self, event_bus, crafting_journal, move_system,
             game_state=game_state,
+            mana_system=mana_system,
             keybinding_registry=kb_registry,
         )
+
+        enchanted_panel = EnchantedBlockPanel(self, event_bus, game_state)
 
         # ── Main menu (title screen / options overlay) ──
         main_menu = MainMenu(self, event_bus, game_state)
@@ -303,7 +311,8 @@ class DungeonApp(ShowBase):
             "effects_renderer": effects_renderer,
             "hud": hud,
             "render_mode_selector": render_mode_selector,
-            "crafting_book_panel": crafting_book_panel,
+            "object_palette": object_palette,
+            "enchanted_panel": enchanted_panel,
             "main_menu": main_menu,
         }
 

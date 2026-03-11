@@ -4,7 +4,7 @@ Records which recipes the player has successfully crafted at least once.
 Provides a pure-data API for UI display — no Panda3D dependency.
 
 Dependencies: core.event_bus, building.crafting_book
-Dependents: main (wiring), ui.crafting_book_panel,
+Dependents: main (wiring), ui.object_palette,
     tests/building/test_crafting_journal.py
 """
 

@@ -5,8 +5,8 @@ intruder.  They can dig tunnels, follow their owner, and become unruly
 (losing control) after too much digging.  They are actual entities with
 position, HP, and simple pathfinding — not abstract abilities.
 
-Dependencies: config, intruders.agent, intruders.personal_map, utils.rng,
-    world.voxel_grid
+Dependencies: config, core.event_bus, intruders.agent,
+    intruders.personal_map, utils.rng, world.voxel_grid
 Dependents: intruders.agent, intruders.decision, core.save_system,
     tests/intruders/
 """
@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 import dungeon_builder.config as _cfg
 
 if TYPE_CHECKING:
+    from dungeon_builder.core.event_bus import EventBus
     from dungeon_builder.intruders.agent import Intruder
     from dungeon_builder.intruders.personal_map import PersonalMap
     from dungeon_builder.utils.rng import SeededRNG
@@ -146,6 +147,7 @@ def update_familiar(
     tamer: Intruder,
     voxel_grid: VoxelGrid,
     rng: SeededRNG,
+    event_bus: EventBus | None = None,
 ) -> None:
     """Tick one familiar.  Called every game tick from decision.py.
 
@@ -153,6 +155,10 @@ def update_familiar(
     - DIGGING: continue dig progress, check unruliness
     - UNRULY: random movement / random digging
     - DEAD: skip
+
+    When *event_bus* is provided, dig completions publish
+    ``voxel_changed`` so structural-integrity and pathfinding systems
+    react to the terrain modification.
     """
     if not familiar.alive:
         return
@@ -160,7 +166,7 @@ def update_familiar(
     if familiar.state == FamiliarState.FOLLOWING:
         _tick_following(familiar, tamer)
     elif familiar.state == FamiliarState.DIGGING:
-        _tick_digging(familiar, tamer, voxel_grid, rng)
+        _tick_digging(familiar, tamer, voxel_grid, rng, event_bus)
     elif familiar.state == FamiliarState.UNRULY:
         _tick_unruly(familiar, voxel_grid, rng)
 
@@ -208,7 +214,14 @@ def check_unruliness(familiar: Familiar, rng: SeededRNG) -> bool:
 
 
 def _tick_following(familiar: Familiar, tamer: Intruder) -> None:
-    """Move the familiar toward the tamer's position."""
+    """Move the familiar toward the tamer's position.
+
+    If the tamer is dead, the familiar stops following (handled by caller
+    skipping dead-tamer updates).
+    """
+    if not tamer.alive:
+        return
+
     familiar.ticks_since_move += 1
     if familiar.ticks_since_move < _cfg.FAMILIAR_MOVE_INTERVAL:
         return
@@ -230,6 +243,7 @@ def _tick_digging(
     tamer: Intruder,
     voxel_grid: VoxelGrid,
     rng: SeededRNG,
+    event_bus: EventBus | None = None,
 ) -> None:
     """Progress on the current dig target."""
     target = familiar.dig_target
@@ -255,7 +269,7 @@ def _tick_digging(
 
     if progress >= _cfg.FAMILIAR_DIG_SPEED:
         # Dig complete — convert to air
-        voxel_grid.set_voxel(tx, ty, tz, _cfg.VOXEL_AIR)
+        voxel_grid.set(tx, ty, tz, _cfg.VOXEL_AIR, event_bus=event_bus)
         del familiar.dig_progress[target]
         familiar.dig_target = None
 
@@ -295,14 +309,14 @@ def _tick_unruly(
     if not voxel_grid.in_bounds(nx, ny, nz):
         return
 
-    vtype = voxel_grid.get_voxel(nx, ny, nz)
+    vtype = voxel_grid.get(nx, ny, nz)
     if vtype == _cfg.VOXEL_AIR:
         familiar.x = nx
         familiar.y = ny
         familiar.z = nz
     elif vtype not in _cfg.NON_DIGGABLE:
         # Random dig attempt
-        voxel_grid.set_voxel(nx, ny, nz, _cfg.VOXEL_AIR)
+        voxel_grid.set(nx, ny, nz, _cfg.VOXEL_AIR)
         familiar.unruliness = min(
             1.0,
             familiar.unruliness + _cfg.FAMILIAR_UNRULINESS_PER_DIG,

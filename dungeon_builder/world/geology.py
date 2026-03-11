@@ -424,11 +424,13 @@ class GeologyGenerator:
         values), so the river sits in valleys without needing to modify
         the heightmap.
         """
-        # Pick random source and sink edges (must be different).
+        # Pick random source edge, sink is always the opposite edge.
+        # This guarantees the path must traverse the full map width or
+        # depth, producing rivers at least half the map long.
+        _OPPOSITE = {"x0": "xw", "xw": "x0", "y0": "yd", "yd": "y0"}
         edges = ["x0", "xw", "y0", "yd"]
-        self.rng.shuffle(edges)
-        source_edge = edges[0]
-        sink_edge = edges[1]
+        source_edge = self.rng.choice(edges)
+        sink_edge = _OPPOSITE[source_edge]
 
         # Random position along the source edge
         margin = 3  # stay a few cells from corners
@@ -775,6 +777,17 @@ class GeologyGenerator:
                 bed_z = lava_bed_z.get((rx, ry), sink_z)
                 if voxel_grid.in_bounds(rx, ry, bed_z):
                     grid[rx, ry, bed_z] = VOXEL_LAVA_SINK
+
+        # Repair ceiling above lava tunnel — caves carved earlier may have
+        # punched air holes into the ceiling (bed_z - 2), which causes
+        # structural instability and debris blocking the lava flow.
+        # Fill any air gaps with basalt (the natural igneous rock at this depth).
+        for rx, ry in lava_cells:
+            bed_z = lava_bed_z.get((rx, ry), sink_z)
+            ceiling_z = bed_z - 2  # 1 above the air tunnel at bed_z - 1
+            if voxel_grid.in_bounds(rx, ry, ceiling_z):
+                if grid[rx, ry, ceiling_z] == VOXEL_AIR:
+                    grid[rx, ry, ceiling_z] = VOXEL_BASALT
 
         # Store for temperature initialization
         voxel_grid._lava_cells = lava_cells  # type: ignore[attr-defined]

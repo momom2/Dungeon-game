@@ -8,7 +8,7 @@ Mouse bindings (mouse1/2/3, wheel) are NOT included — they're not rebindable.
 
 Dependencies: (none — standalone)
 Dependents: core.game_state, main, rendering.camera, ui.hud,
-    ui.main_menu, ui.render_mode_selector, ui.crafting_book_panel,
+    ui.main_menu, ui.render_mode_selector, ui.object_palette,
     tests/core/test_keybinding.py
 """
 

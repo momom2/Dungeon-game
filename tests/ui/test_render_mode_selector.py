@@ -62,4 +62,15 @@ class TestVoxelWorldRendererModeSwitch:
         """_MODES and _LABELS should cover exactly the same modes."""
         from dungeon_builder.ui.render_mode_selector import _MODES, _LABELS
         assert set(_MODES) == set(_LABELS.keys())
-        assert len(_MODES) == 5
+        assert len(_MODES) == 6
+
+    def test_connections_mode_in_modes_list(self):
+        """Connections mode should be in the modes list."""
+        from dungeon_builder.ui.render_mode_selector import _MODES
+        assert "connections" in _MODES
+
+    def test_connections_label_exists(self):
+        """Connections mode should have a display label."""
+        from dungeon_builder.ui.render_mode_selector import _LABELS
+        assert "connections" in _LABELS
+        assert _LABELS["connections"] == "Connections"
