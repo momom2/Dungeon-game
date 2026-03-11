@@ -40,7 +40,7 @@ class FakeEventBus:
 
 
 class FakeVoxelGrid:
-    """Minimal VoxelGrid stub with the 17 arrays (14 original + 3 velocity)."""
+    """Minimal VoxelGrid stub with all serialized arrays."""
 
     def __init__(self, w=8, d=8, h=5):
         self.width = w
@@ -63,6 +63,9 @@ class FakeVoxelGrid:
         self.water_vx = np.zeros((w, d, h), dtype=np.float32)
         self.water_vy = np.zeros((w, d, h), dtype=np.float32)
         self.water_vz = np.zeros((w, d, h), dtype=np.float32)
+        self.lava_level = np.zeros((w, d, h), dtype=np.uint8)
+        self.mana_crystals = np.zeros((w, d, h), dtype=np.uint8)
+        self.water_pressure = np.zeros((w, d, h), dtype=np.float32)
         self._dirty_chunks = set()
 
     def mark_all_dirty(self):
@@ -461,7 +464,7 @@ class TestSaveLoadRoundtrip:
         )
         sd = SaveSystem.load(path)
         assert sd is not None
-        assert len(sd.grid_arrays) == 17  # 14 original + 3 velocity
+        assert len(sd.grid_arrays) == len(_GRID_ARRAY_NAMES)
         assert sd.grid_arrays["grid"][1, 2, 3] == 5
         assert sd.grid_arrays["humidity"][0, 0, 0] == pytest.approx(0.75)
         assert sd.grid_arrays["temperature"][3, 3, 3] == pytest.approx(500.0)
