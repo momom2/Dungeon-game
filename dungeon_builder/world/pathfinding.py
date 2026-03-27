@@ -1,4 +1,9 @@
-"""A* pathfinding on the 3D voxel grid."""
+"""A* pathfinding on the 3D voxel grid.
+
+Dependencies: config, world.voxel_grid
+Dependents: main (wiring), core.game_state, intruders.decision,
+    tests/world/test_pathfinding.py, tests/intruders/, tests/physics/
+"""
 
 from __future__ import annotations
 

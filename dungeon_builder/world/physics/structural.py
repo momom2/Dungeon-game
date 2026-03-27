@@ -11,6 +11,9 @@ Models real architectural principles:
 - Tensile failure: bending moment in cantilevers exceeds tensile strength
   (tension = load × span / 2, simply-supported beam approximation)
 - Foundation: deeper blocks bear accumulated weight from above
+
+Dependencies: config, core.event_bus, world.voxel_grid
+Dependents: main (wiring), tests/physics/test_structural.py
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from dungeon_builder.config import (
     VOXEL_AIR,
+    VOXEL_WATER,
     VOXEL_WEIGHT,
     VOXEL_MAX_LOAD,
     VOXEL_POROSITY,
@@ -35,6 +39,7 @@ from dungeon_builder.config import (
     TEMP_WEAKNESS_MIN,
     TEMP_WEAKNESS_MAX,
     TEMP_WEAKNESS_FACTOR,
+    WATER_BUOYANCY_FACTOR,
 )
 
 if TYPE_CHECKING:
@@ -97,14 +102,55 @@ class StructuralIntegrityPhysics:
             if 0 <= vtype < 256:
                 self._shear_lut[vtype] = min(shear, 1e9)
 
+        # Snapshots for skip-if-unchanged optimisation
+        self._last_structural_grid: np.ndarray | None = None
+        self._last_structural_loose: np.ndarray | None = None
+
+        # Track whether blocks fell recently.  While blocks are actively
+        # falling, structural recomputation is deferred to avoid O(n) work
+        # every 10 ticks on a transient state that changes each tick.
+        self._falling_active: bool = False
+
         event_bus.subscribe("tick", self._on_tick)
+        event_bus.subscribe("blocks_fell", self._on_blocks_fell)
+        event_bus.subscribe("blocks_spread", self._on_blocks_fell)
+
+    def _on_blocks_fell(self, **kw) -> None:
+        """Note that blocks are actively falling; defer structural checks."""
+        self._falling_active = True
 
     def _on_tick(self, tick: int, **kw) -> None:
         if tick % STRUCTURAL_TICK_INTERVAL != 0:
             return
+
+        # While blocks are actively falling, defer expensive recompute.
+        # Gravity fires every tick; structural every 10.  When blocks are
+        # mid-fall the grid changes every tick → recomputing load is wasted
+        # because it'll change again next tick.  Skip this interval and
+        # clear the flag — if falling continues, the flag will be re-set
+        # by the next blocks_fell event before our next interval.
+        if self._falling_active:
+            self._falling_active = False
+            return
+
+        # Skip full recomputation if grid and loose arrays haven't changed
+        grid = self.voxel_grid
+        if (
+            self._last_structural_grid is not None
+            and np.array_equal(grid.grid, self._last_structural_grid)
+            and np.array_equal(grid.loose, self._last_structural_loose)
+        ):
+            return
+
         self._compute_load()
-        self._check_failures()
-        self._compute_tensile_failures()
+        # Compute all three capacity arrays once (shared environmental modifier)
+        comp_cap, shear_cap, tensile_cap = self._compute_all_capacities()
+        self._check_failures(comp_cap, shear_cap)
+        self._compute_tensile_failures(tensile_cap)
+
+        # Save snapshot for next skip check
+        self._last_structural_grid = grid.grid.copy()
+        self._last_structural_loose = grid.loose.copy()
 
     def _compute_load(self) -> None:
         """Top-down load accumulation with stiffness-weighted distribution.
@@ -122,7 +168,12 @@ class StructuralIntegrityPhysics:
         w, d, h = grid.width, grid.depth, grid.height
 
         # Weight of each block from LUT
-        self_weight = self._weight_lut[voxels]
+        self_weight = self._weight_lut[voxels].copy()
+
+        # --- Buoyancy: reduce weight for blocks submerged in water ---
+        water_mask = (voxels == VOXEL_WATER)
+        if np.any(water_mask):
+            self._apply_buoyancy(self_weight, water_mask, voxels, h)
 
         # Solid mask (non-air, non-loose blocks bear load)
         solid = (voxels != VOXEL_AIR) & (~loose)
@@ -137,45 +188,63 @@ class StructuralIntegrityPhysics:
         load = np.zeros((w, d, h), dtype=np.float32)
         shear = np.zeros((w, d, h), dtype=np.float32)
 
+        # Pre-allocate reusable 2D buffers (avoid per-z allocation)
+        k_lat = np.empty((4, w, d), dtype=np.float32)
+        frac_lat = np.empty((4, w, d), dtype=np.float32)
+        neighbor_count = np.empty((w, d), dtype=np.float32)
+
         # Process top-to-bottom (z=0 is surface, z=h-1 is deepest)
         for z in range(h):
+            solid_z = solid[:, :, z]
+
+            # Skip entirely empty z-levels (no solid blocks to load)
+            if not np.any(solid_z):
+                continue
+
+            load_z = load[:, :, z]
+
             # Each block starts with its own weight
-            load[:, :, z] += self_weight[:, :, z]
+            load_z += self_weight[:, :, z]
 
-            # Anchors absorb all load
-            load[:, :, z][anchors[:, :, z]] = 0.0
-
-            # Non-solid blocks can't transmit load
-            load[:, :, z][~solid[:, :, z]] = 0.0
+            # Anchors absorb all load; non-solid can't transmit
+            anchor_z = anchors[:, :, z]
+            load_z[anchor_z] = 0.0
+            load_z[~solid_z] = 0.0
 
             if z >= h - 1:
                 continue
 
-            current_load = load[:, :, z]
-
             # Buttressing: count solid cardinal neighbors at same z-level
-            solid_z = solid[:, :, z].astype(np.float32)
-            neighbor_count = np.zeros((w, d), dtype=np.float32)
-            neighbor_count[1:, :] += solid_z[:-1, :]
-            neighbor_count[:-1, :] += solid_z[1:, :]
-            neighbor_count[:, 1:] += solid_z[:, :-1]
-            neighbor_count[:, :-1] += solid_z[:, 1:]
+            solid_z_f = solid_z.astype(np.float32)
+            neighbor_count[:] = 0.0
+            neighbor_count[1:, :] += solid_z_f[:-1, :]
+            neighbor_count[:-1, :] += solid_z_f[1:, :]
+            neighbor_count[:, 1:] += solid_z_f[:, :-1]
+            neighbor_count[:, :-1] += solid_z_f[:, 1:]
 
             buttress_mult = np.clip(
                 1.0 - neighbor_count * BUTTRESS_FACTOR, 0.5, 1.0
             )
-            effective_load = current_load * buttress_mult
+            effective_load = load_z * buttress_mult
 
             # --- Stiffness-weighted distribution ---
-            # Gather stiffness of 5 receiver positions:
-            # [0] = direct-below, [1..4] = +x,-x,+y,-y at z+1
             solid_below = solid[:, :, z + 1]
 
+            # Fast path: if the level below is entirely solid, all load
+            # goes directly below (100% compressive, no lateral, no arch).
+            # This skips all the expensive np.where calls for stiffness
+            # fractions.  Common for deep underground z-levels.
+            if np.all(solid_below):
+                load[:, :, z + 1] += effective_load
+                continue
+
+            stiff_z1 = stiffness[:, :, z + 1]
+
             # Direct below stiffness (compressive receiver)
-            k_below = np.where(solid_below, stiffness[:, :, z + 1], 0.0)
+            k_below = np.where(solid_below, stiff_z1, 0.0)
 
             # Lateral-below stiffness (shear receivers)
-            k_lat = np.zeros((4, w, d), dtype=np.float32)
+            k_lat[:] = 0.0
             if w > 1:
                 k_lat[0, :-1, :] = np.where(
                     solid[1:, :, z + 1], stiffness[1:, :, z + 1], 0.0
@@ -194,49 +263,41 @@ class StructuralIntegrityPhysics:
             # Total stiffness of all receivers
             k_total = k_below + k_lat[0] + k_lat[1] + k_lat[2] + k_lat[3]
 
-            # Compute fractions (safe division: when k_total==0, no distribution)
-            safe_k = np.where(k_total > 0, k_total, 1.0)
-            frac_below = np.where(k_total > 0, k_below / safe_k, 0.0)
-            frac_lat = np.zeros((4, w, d), dtype=np.float32)
+            # Compute fractions (safe division)
+            has_receivers = k_total > 0
+            safe_k = np.where(has_receivers, k_total, 1.0)
+            frac_below = np.where(has_receivers, k_below / safe_k, 0.0)
             for i in range(4):
-                frac_lat[i] = np.where(k_total > 0, k_lat[i] / safe_k, 0.0)
+                frac_lat[i] = np.where(has_receivers, k_lat[i] / safe_k, 0.0)
 
             # Distribute effective_load proportional to stiffness fractions
-            # Direct-below (compressive)
             direct_below_load = effective_load * frac_below
             load[:, :, z + 1] += direct_below_load
 
-            # Lateral-below (shear)
-            # +x direction
-            if w > 1:
-                lat_load_0 = effective_load * frac_lat[0]
-                load[1:, :, z + 1] += lat_load_0[:-1, :]
-                shear[1:, :, z + 1] += lat_load_0[:-1, :]
-
-                lat_load_1 = effective_load * frac_lat[1]
-                load[:-1, :, z + 1] += lat_load_1[1:, :]
-                shear[:-1, :, z + 1] += lat_load_1[1:, :]
-            if d > 1:
-                lat_load_2 = effective_load * frac_lat[2]
-                load[:, 1:, z + 1] += lat_load_2[:, :-1]
-                shear[:, 1:, z + 1] += lat_load_2[:, :-1]
-
-                lat_load_3 = effective_load * frac_lat[3]
-                load[:, :-1, z + 1] += lat_load_3[:, 1:]
-                shear[:, :-1, z + 1] += lat_load_3[:, 1:]
-
-            # Track how much was actually distributed
+            # Lateral-below (shear) — compute and distribute in place
             distributed = direct_below_load.copy()
             if w > 1:
-                distributed[:-1, :] += lat_load_0[:-1, :]
-                distributed[1:, :] += lat_load_1[1:, :]
+                lat_0 = effective_load[:-1, :] * frac_lat[0, :-1, :]
+                load[1:, :, z + 1] += lat_0
+                shear[1:, :, z + 1] += lat_0
+                distributed[:-1, :] += lat_0
+
+                lat_1 = effective_load[1:, :] * frac_lat[1, 1:, :]
+                load[:-1, :, z + 1] += lat_1
+                shear[:-1, :, z + 1] += lat_1
+                distributed[1:, :] += lat_1
             if d > 1:
-                distributed[:, :-1] += lat_load_2[:, :-1]
-                distributed[:, 1:] += lat_load_3[:, 1:]
+                lat_2 = effective_load[:, :-1] * frac_lat[2, :, :-1]
+                load[:, 1:, z + 1] += lat_2
+                shear[:, 1:, z + 1] += lat_2
+                distributed[:, :-1] += lat_2
+
+                lat_3 = effective_load[:, 1:] * frac_lat[3, :, 1:]
+                load[:, :-1, z + 1] += lat_3
+                shear[:, :-1, z + 1] += lat_3
+                distributed[:, 1:] += lat_3
 
             # --- Multi-block arch detection ---
-            # When direct-below is air, scan laterally for nearest solid
-            # blocks up to MAX_ARCH_SPAN and redistribute blocked load
             air_below = (~solid_below) & (voxels[:, :, z + 1] == VOXEL_AIR)
             blocked_load = np.where(air_below, effective_load * frac_below, 0.0)
 
@@ -247,12 +308,44 @@ class StructuralIntegrityPhysics:
                 distributed += arch_distributed
 
             # Undistributed load stays on the current block as retained stress
-            # (cantilever stress)
             undistributed = np.maximum(effective_load - distributed, 0.0)
-            load[:, :, z] += undistributed
+            load_z += undistributed
 
         grid.load[:] = load
         grid.shear_load[:] = shear
+
+    @staticmethod
+    def _apply_buoyancy(
+        weights: np.ndarray,
+        water_mask: np.ndarray,
+        voxels: np.ndarray,
+        h: int,
+    ) -> None:
+        """Reduce effective weight for blocks submerged in water.
+
+        A solid block with water directly above it (z-1, toward surface)
+        has its weight reduced by ``WATER_BUOYANCY_FACTOR``.  This makes
+        blocks at the bottom of deep water columns structurally lighter,
+        preventing unrealistic collapses of submerged structures.
+
+        Water blocks themselves are not affected (they have their own
+        weight for pressure calculations).
+        """
+        for z in range(1, h):
+            # Check if water exists above (z-1 = toward surface)
+            water_above = water_mask[:, :, z - 1]
+            # Only apply to solid non-water blocks
+            solid_here = (
+                (voxels[:, :, z] != VOXEL_AIR)
+                & (voxels[:, :, z] != VOXEL_WATER)
+            )
+            submerged = water_above & solid_here
+            if np.any(submerged):
+                weights[:, :, z] = np.where(
+                    submerged,
+                    weights[:, :, z] * WATER_BUOYANCY_FACTOR,
+                    weights[:, :, z],
+                )
 
     def _distribute_arch_load(
         self,
@@ -411,8 +504,11 @@ class StructuralIntegrityPhysics:
 
         return arch_distributed
 
-    def _compute_effective_capacity(self) -> np.ndarray:
-        """Compute compressive capacity modified by temperature and humidity.
+    def _compute_environmental_modifier(self) -> np.ndarray:
+        """Compute shared environmental modifier for all capacity types.
+
+        Returns a (w, d, h) float32 array of combined humidity + temperature
+        weakness factor.  Each capacity type multiplies its base LUT by this.
 
         Humidity weakness is scaled by material porosity: porous materials
         (chalk, sandstone) weaken far more than dense ones (obsidian, granite).
@@ -420,15 +516,11 @@ class StructuralIntegrityPhysics:
         grid = self.voxel_grid
         voxels = grid.grid
 
-        base_cap = self._capacity_lut[voxels]
-
-        # Humidity modifier scaled by porosity: porous materials weaken more
         porosity = self._porosity_lut[voxels]
         humidity_mod = np.clip(
             1.0 - grid.humidity * HUMIDITY_WEAKNESS * porosity, 0.5, 1.0
         )
 
-        # Temperature modifier: linear ramp between threshold and max
         temp_factor = np.clip(
             (grid.temperature - TEMP_WEAKNESS_MIN)
             / (TEMP_WEAKNESS_MAX - TEMP_WEAKNESS_MIN),
@@ -437,61 +529,30 @@ class StructuralIntegrityPhysics:
         )
         temp_mod = 1.0 - temp_factor * TEMP_WEAKNESS_FACTOR
 
-        return base_cap * humidity_mod * temp_mod
+        return humidity_mod * temp_mod
 
-    def _compute_effective_shear_capacity(self) -> np.ndarray:
-        """Compute shear capacity modified by temperature and humidity.
+    def _compute_all_capacities(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Compute compressive, shear, and tensile capacities in one pass.
 
-        Same environmental modifiers as compressive capacity, but using
-        VOXEL_SHEAR_STRENGTH as the base.
+        Shares the expensive environmental modifier computation across all
+        three capacity types, saving ~12 temporary array allocations.
+
+        Returns (comp_cap, shear_cap, tensile_cap) as float32 arrays.
         """
-        grid = self.voxel_grid
-        voxels = grid.grid
+        voxels = self.voxel_grid.grid
+        env_mod = self._compute_environmental_modifier()
 
-        base_shear = self._shear_lut[voxels]
+        comp_cap = self._capacity_lut[voxels] * env_mod
+        shear_cap = self._shear_lut[voxels] * env_mod
+        tensile_cap = self._tensile_lut[voxels] * env_mod
 
-        porosity = self._porosity_lut[voxels]
-        humidity_mod = np.clip(
-            1.0 - grid.humidity * HUMIDITY_WEAKNESS * porosity, 0.5, 1.0
-        )
+        return comp_cap, shear_cap, tensile_cap
 
-        temp_factor = np.clip(
-            (grid.temperature - TEMP_WEAKNESS_MIN)
-            / (TEMP_WEAKNESS_MAX - TEMP_WEAKNESS_MIN),
-            0.0,
-            1.0,
-        )
-        temp_mod = 1.0 - temp_factor * TEMP_WEAKNESS_FACTOR
-
-        return base_shear * humidity_mod * temp_mod
-
-    def _compute_effective_tensile_capacity(self) -> np.ndarray:
-        """Compute tensile capacity modified by temperature and humidity.
-
-        Same environmental modifiers as compressive capacity, but using
-        VOXEL_TENSILE_STRENGTH as the base.
-        """
-        grid = self.voxel_grid
-        voxels = grid.grid
-
-        base_tensile = self._tensile_lut[voxels]
-
-        porosity = self._porosity_lut[voxels]
-        humidity_mod = np.clip(
-            1.0 - grid.humidity * HUMIDITY_WEAKNESS * porosity, 0.5, 1.0
-        )
-
-        temp_factor = np.clip(
-            (grid.temperature - TEMP_WEAKNESS_MIN)
-            / (TEMP_WEAKNESS_MAX - TEMP_WEAKNESS_MIN),
-            0.0,
-            1.0,
-        )
-        temp_mod = 1.0 - temp_factor * TEMP_WEAKNESS_FACTOR
-
-        return base_tensile * humidity_mod * temp_mod
-
-    def _check_failures(self) -> None:
+    def _check_failures(
+        self,
+        effective_comp_cap: np.ndarray,
+        effective_shear_cap: np.ndarray,
+    ) -> None:
         """Compare load against capacity. Overloaded blocks become loose.
 
         Checks both compressive and shear failure modes:
@@ -503,8 +564,6 @@ class StructuralIntegrityPhysics:
         voxels = grid.grid
         loose = grid.loose
 
-        effective_comp_cap = self._compute_effective_capacity()
-        effective_shear_cap = self._compute_effective_shear_capacity()
         load = grid.load
         shear_load = grid.shear_load
 
@@ -550,11 +609,12 @@ class StructuralIntegrityPhysics:
             xs, ys, zs = xs[worst_indices], ys[worst_indices], zs[worst_indices]
 
         loose[xs, ys, zs] = True
-        grid.mark_all_dirty()
+        grid.bump_physics_generation()
+        grid.mark_blocks_dirty(xs, ys, zs)
 
         self.event_bus.publish("structural_failure", count=int(count))
 
-    def _compute_tensile_failures(self) -> None:
+    def _compute_tensile_failures(self, effective_tensile: np.ndarray) -> None:
         """Check for tensile/bending failure in cantilevered blocks.
 
         For each unsupported solid block (no solid directly below, not an
@@ -576,9 +636,8 @@ class StructuralIntegrityPhysics:
         solid = (voxels != VOXEL_AIR) & (~loose)
         anchors = self._anchor_lut[voxels]
 
-        effective_tensile = self._compute_effective_tensile_capacity()
-
         total_new_loose = 0
+        dirty_positions: list[tuple] = []  # Collect (txs, tys, z) for dirty marking
 
         for z in range(h):
             solid_z = solid[:, :, z]
@@ -601,54 +660,52 @@ class StructuralIntegrityPhysics:
                 continue
 
             # Compute minimum span to nearest supported block in 4 cardinal
-            # directions along this z-level.
+            # directions along this z-level (vectorized).
             # span = min distance to a supported-and-solid block.
             # If no supported block found in any direction, span = infinity.
-            min_span = np.full((w, d), np.float32(w + d), dtype=np.float32)
+            max_span = np.float32(w + d)
+            min_span = np.full((w, d), max_span, dtype=np.float32)
 
-            # Scan each row for +x/-x spans
-            for y in range(d):
-                # +x scan: forward pass
-                last_supported = -1
-                for x in range(w):
-                    if supported[x, y] and solid_z[x, y]:
-                        last_supported = x
-                    elif unsupported[x, y] and last_supported >= 0:
-                        span = x - last_supported
-                        if span < min_span[x, y]:
-                            min_span[x, y] = span
+            # Support mask: cells that are both supported and solid
+            support_mask = supported & solid_z
 
-                # -x scan: backward pass
-                last_supported = -1
-                for x in range(w - 1, -1, -1):
-                    if supported[x, y] and solid_z[x, y]:
-                        last_supported = x
-                    elif unsupported[x, y] and last_supported >= 0:
-                        span = last_supported - x
-                        if span < min_span[x, y]:
-                            min_span[x, y] = span
+            # +x direction: distance from nearest supported cell to the left
+            # Build index array where supported cells record their x index
+            x_idx = np.arange(w, dtype=np.float32)[:, None] * np.ones(d, dtype=np.float32)[None, :]
+            # Replace non-support with -inf, then cumulative max along x axis
+            sup_x_fwd = np.where(support_mask, x_idx, np.float32(-1))
+            np.maximum.accumulate(sup_x_fwd, axis=0, out=sup_x_fwd)
+            span_fwd_x = x_idx - sup_x_fwd
+            # Only valid where sup_x_fwd >= 0 (found a supported cell)
+            valid_fwd_x = (sup_x_fwd >= 0) & unsupported
+            min_span = np.where(valid_fwd_x & (span_fwd_x < min_span), span_fwd_x, min_span)
 
-            # Scan each column for +y/-y spans
-            for x in range(w):
-                # +y scan
-                last_supported = -1
-                for y in range(d):
-                    if supported[x, y] and solid_z[x, y]:
-                        last_supported = y
-                    elif unsupported[x, y] and last_supported >= 0:
-                        span = y - last_supported
-                        if span < min_span[x, y]:
-                            min_span[x, y] = span
+            # -x direction: distance from nearest supported cell to the right
+            sup_x_bwd = np.where(support_mask, x_idx, np.float32(-1))
+            sup_x_bwd_rev = sup_x_bwd[::-1, :]
+            # Cumulative max of reversed → finds nearest support to the right
+            np.maximum.accumulate(sup_x_bwd_rev, axis=0, out=sup_x_bwd_rev)
+            sup_x_bwd = sup_x_bwd_rev[::-1, :]
+            span_bwd_x = sup_x_bwd - x_idx
+            valid_bwd_x = (sup_x_bwd >= 0) & unsupported
+            min_span = np.where(valid_bwd_x & (span_bwd_x < min_span), span_bwd_x, min_span)
 
-                # -y scan
-                last_supported = -1
-                for y in range(d - 1, -1, -1):
-                    if supported[x, y] and solid_z[x, y]:
-                        last_supported = y
-                    elif unsupported[x, y] and last_supported >= 0:
-                        span = last_supported - y
-                        if span < min_span[x, y]:
-                            min_span[x, y] = span
+            # +y direction: distance from nearest supported cell above (in y)
+            y_idx = np.ones(w, dtype=np.float32)[:, None] * np.arange(d, dtype=np.float32)[None, :]
+            sup_y_fwd = np.where(support_mask, y_idx, np.float32(-1))
+            np.maximum.accumulate(sup_y_fwd, axis=1, out=sup_y_fwd)
+            span_fwd_y = y_idx - sup_y_fwd
+            valid_fwd_y = (sup_y_fwd >= 0) & unsupported
+            min_span = np.where(valid_fwd_y & (span_fwd_y < min_span), span_fwd_y, min_span)
+
+            # -y direction: distance from nearest supported cell below (in y)
+            sup_y_bwd = np.where(support_mask, y_idx, np.float32(-1))
+            sup_y_bwd_rev = sup_y_bwd[:, ::-1]
+            np.maximum.accumulate(sup_y_bwd_rev, axis=1, out=sup_y_bwd_rev)
+            sup_y_bwd = sup_y_bwd_rev[:, ::-1]
+            span_bwd_y = sup_y_bwd - y_idx
+            valid_bwd_y = (sup_y_bwd >= 0) & unsupported
+            min_span = np.where(valid_bwd_y & (span_bwd_y < min_span), span_bwd_y, min_span)
 
             # Compute bending moment: tension = load × span / 2
             block_load = load[:, :, z]
@@ -689,7 +746,11 @@ class StructuralIntegrityPhysics:
 
             loose[txs, tys, z] = True
             total_new_loose += count
+            dirty_positions.append((txs, tys, z))
 
         if total_new_loose > 0:
-            grid.mark_all_dirty()
+            grid.bump_physics_generation()
+            for d_txs, d_tys, d_z in dirty_positions:
+                d_zs = np.full_like(d_txs, d_z)
+                grid.mark_blocks_dirty(d_txs, d_tys, d_zs)
             self.event_bus.publish("tensile_failure", count=total_new_loose)

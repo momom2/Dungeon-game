@@ -7,6 +7,9 @@ exceeds THERMAL_CRACK_THRESHOLD the block cracks (becomes loose).
 
 Quenching (water adjacent to hot blocks) dramatically amplifies
 thermal stress, enabling explosive cracking gameplay.
+
+Dependencies: config, core.event_bus, world.voxel_grid
+Dependents: tests/physics/test_thermal_stress.py
 """
 
 from __future__ import annotations
@@ -161,5 +164,6 @@ class ThermalStressPhysics:
 
         grid.loose[xs, ys, zs] = True
         fatigue[xs, ys, zs] = 0.0  # Reset fatigue on cracked blocks
+        grid.bump_physics_generation()
         grid.mark_all_dirty()
         self.event_bus.publish("thermal_crack", count=int(count))

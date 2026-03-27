@@ -1,4 +1,8 @@
-"""Tick-based time management. All game simulation advances in discrete ticks."""
+"""Tick-based time management. All game simulation advances in discrete ticks.
+
+Dependencies: config
+Dependents: main (wiring), core.game_state, tests/core/test_time_manager.py
+"""
 
 from __future__ import annotations
 

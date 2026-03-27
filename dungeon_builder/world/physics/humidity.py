@@ -3,6 +3,10 @@
 Moisture seeps through porous materials over time, creating wet zones
 around water sources. Lava voxels generate steam (humidity) in adjacent
 blocks. Surface blocks lose humidity through evaporation.
+
+Dependencies: config, core.event_bus, world.voxel_grid
+Dependents: main (wiring), tests/physics/test_humidity.py,
+    tests/physics/test_steam_vent.py
 """
 
 from __future__ import annotations
@@ -14,14 +18,19 @@ from dungeon_builder.config import (
     VOXEL_AIR,
     VOXEL_LAVA,
     VOXEL_WATER,
+    VOXEL_WATER_SOURCE,
+    VOXEL_WATER_SINK,
+    VOXEL_STEAM_VENT,
     VOXEL_POROSITY,
-    LAVA_TEMPERATURE,
+    SURFACE_Z,
     HUMIDITY_TICK_INTERVAL,
     HUMIDITY_DIFFUSION_RATE,
     HUMIDITY_SURFACE_LOSS,
     HUMIDITY_SOURCE_LEVEL,
     WATER_HUMIDITY_SOURCE,
     CONVECTION_RATE,
+    STEAM_VENT_HUMIDITY_PULSE,
+    STEAM_VENT_RANGE,
 )
 
 if TYPE_CHECKING:
@@ -134,12 +143,13 @@ class HumidityPhysics:
         hum += total_hum_flow
         temp += total_heat_flow
 
-        # Surface evaporation (z=0) — environmental sink
-        hum[:, :, 0] *= (1.0 - HUMIDITY_SURFACE_LOSS)
+        # Surface/sky evaporation (z <= SURFACE_Z) — environmental sink
+        hum[:, :, :SURFACE_Z + 1] *= (1.0 - HUMIDITY_SURFACE_LOSS)
 
         # Steam from lava: blocks adjacent to lava gain humidity
         # (lava is an explicit source — allowed to create humidity)
-        lava_mask = voxels == VOXEL_LAVA
+        # Use lava_level > 0 to detect fluid lava
+        lava_mask = grid.lava_level > 0
         if np.any(lava_mask):
             steam = np.zeros_like(hum)
             # Expand lava mask to 6-connected neighbors
@@ -158,8 +168,13 @@ class HumidityPhysics:
             steam_level = HUMIDITY_SOURCE_LEVEL * poro[receives_steam]
             hum[receives_steam] = np.maximum(hum[receives_steam], steam_level)
 
-        # Humidity from water blocks: adjacent blocks gain humidity (scaled by porosity)
-        water_mask = voxels == VOXEL_WATER
+        # Water sinks: force humidity to 0
+        sink_mask = voxels == VOXEL_WATER_SINK
+        if np.any(sink_mask):
+            hum[sink_mask] = 0.0
+
+        # Humidity from water blocks and water sources: adjacent blocks gain humidity
+        water_mask = (voxels == VOXEL_WATER) | (voxels == VOXEL_WATER_SOURCE)
         if np.any(water_mask):
             water_adj = np.zeros_like(hum, dtype=np.bool_)
             if grid.width > 1:
@@ -184,8 +199,30 @@ class HumidityPhysics:
                     hum[receives_moisture], moisture_level
                 )
 
+        # Steam vent humidity pulse upward through air
+        self._apply_steam_vent_humidity(voxels, hum)
+
         # Clamp humidity to [0.0, 1.0]
         np.clip(hum, 0.0, 1.0, out=hum)
 
         # Safety clamp (CFL guarantees non-negativity, but float rounding)
         np.maximum(temp, 0.0, out=temp)
+
+    def _apply_steam_vent_humidity(
+        self, voxels: np.ndarray, hum: np.ndarray,
+    ) -> None:
+        """Steam vents push humidity upward through air cells above them."""
+        vent_positions = np.argwhere(voxels == VOXEL_STEAM_VENT)
+        if len(vent_positions) == 0:
+            return
+
+        for pos in vent_positions:
+            x, y, z = int(pos[0]), int(pos[1]), int(pos[2])
+            # Pulse humidity upward (z-1 = shallower/up)
+            for dz in range(1, STEAM_VENT_RANGE + 1):
+                nz = z - dz
+                if nz < 0:
+                    break
+                if voxels[x, y, nz] != VOXEL_AIR:
+                    break  # Blocked by solid
+                hum[x, y, nz] = min(1.0, hum[x, y, nz] + STEAM_VENT_HUMIDITY_PULSE)

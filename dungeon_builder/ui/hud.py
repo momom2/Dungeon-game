@@ -1,221 +1,332 @@
-"""Main HUD overlay: core HP, tick counter, speed controls, Z-level, tool/hand info."""
+"""Main HUD overlay: core HP, tick counter, speed controls, Z-level, tool/hand info.
+
+Dependencies: config, ui.voxel_names, ui.style, ui.hud_inventory,
+    core.event_bus, core.game_state, core.keybinding_registry
+Dependents: main (wiring), tests/ui/test_hud.py
+"""
 
 from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING
 
-from direct.gui.DirectGui import DirectFrame, DirectLabel, DirectButton
+from direct.gui.DirectGui import (
+    DirectFrame, DirectLabel, DirectButton,
+)
 from panda3d.core import TextNode
 from direct.showbase.ShowBase import ShowBase
 from direct.task.Task import Task
 
-from dungeon_builder.config import VOXEL_COLORS, ARCHETYPE_COLORS
+import dungeon_builder.config as _cfg
+from dungeon_builder.ui.hud_inventory import InventoryMixin
+from dungeon_builder.config import (
+    RENDER_MODE_HEAT,
+    RENDER_MODE_HUMIDITY,
+    RENDER_MODE_MATTER,
+    RENDER_MODE_STRUCTURAL,
+)
+from dungeon_builder.ui.voxel_names import VTYPE_NAMES as _VTYPE_NAMES
+from dungeon_builder.ui import style as _sty
 
 if TYPE_CHECKING:
+    from direct.gui.DirectGui import DirectScrolledFrame
     from dungeon_builder.core.event_bus import EventBus
     from dungeon_builder.core.game_state import GameState
+    from dungeon_builder.core.keybinding_registry import KeybindingRegistry
 
 logger = logging.getLogger("dungeon_builder.ui")
 
-# Map voxel type int to a friendly name
-_VTYPE_NAMES = {
-    1: "Dirt", 2: "Stone", 3: "Bedrock", 4: "Core",
-    10: "Sandstone", 11: "Limestone", 12: "Shale", 13: "Chalk",
-    20: "Slate", 21: "Marble", 22: "Gneiss",
-    30: "Granite", 31: "Basalt", 32: "Obsidian",
-    40: "Iron Ore", 41: "Copper Ore", 42: "Gold Ore", 43: "Mana Crystal",
-    50: "Lava",
-    60: "Iron Ingot", 61: "Copper Ingot", 62: "Gold Ingot", 63: "Enchanted Metal",
-}
 
-
-class HUD:
+class HUD(InventoryMixin):
     """HUD showing game state, tool info, held material, and error messages."""
 
-    def __init__(self, app: ShowBase, event_bus: EventBus, game_state: GameState) -> None:
+    def __init__(
+        self,
+        app: ShowBase,
+        event_bus: EventBus,
+        game_state: GameState,
+        keybinding_registry: KeybindingRegistry | None = None,
+    ) -> None:
         self.app = app
         self.event_bus = event_bus
         self.game_state = game_state
+        self._kb = keybinding_registry
 
-        a2d = app.aspect2d
+        # Render mode tracking (for context-specific hover info)
+        self._render_mode = RENDER_MODE_MATTER
 
-        # Top bar background
+        # Craft-mode tracking
+        self._craft_recipe_name: str | None = None
+        self._craft_remaining: int = 0
+
+        # Intruder tracking
+        self._intruder_count = 0
+        self._archetype_counts: dict[str, int] = {}
+
+        # Build UI
+        self._build_top_bar()
+        self._build_left_panel()
+        self._build_bottom_bar()
+        self._build_error_display()
+        self._build_game_over_overlay()
+        self._subscribe_events()
+        self._bind_keys()
+
+    # ── UI construction ──────────────────────────────────────────────
+
+    def _build_top_bar(self) -> None:
+        """Core HP, tick counter, speed controls, Z-level indicator."""
+        a2d = self.app.aspect2d
+
         self.top_bar = DirectFrame(
-            frameColor=(0, 0, 0, 0.7),
+            frameColor=_sty.BAR_BG,
             frameSize=(-2.0, 2.0, -0.07, 0.07),
             pos=(0, 0, 0.93),
             parent=a2d,
         )
 
-        # Core HP
         self.core_hp_label = DirectLabel(
             text="Core: 100/100",
-            text_fg=(1, 0.3, 0.3, 1),
-            text_scale=0.05,
+            text_fg=_sty.ERROR_COLOR, text_scale=0.05,
             text_align=TextNode.A_left,
             pos=(-1.7, 0, 0.91),
-            frameColor=(0, 0, 0, 0),
-            parent=a2d,
+            frameColor=_sty.TRANSPARENT, parent=a2d,
         )
 
-        # Tick counter
+        self.mana_label = DirectLabel(
+            text="Mana: 0/1000",
+            text_fg=_sty.MANA_COLOR, text_scale=0.05,
+            text_align=TextNode.A_left,
+            pos=(-1.1, 0, 0.91),
+            frameColor=_sty.TRANSPARENT, parent=a2d,
+        )
+
         self.time_label = DirectLabel(
             text="Tick: 0",
-            text_fg=(1, 1, 1, 1),
-            text_scale=0.05,
+            text_fg=_sty.TEXT_COLOR, text_scale=0.05,
             text_align=TextNode.A_center,
             pos=(0, 0, 0.91),
-            frameColor=(0, 0, 0, 0),
-            parent=a2d,
+            frameColor=_sty.TRANSPARENT, parent=a2d,
         )
 
-        # Speed controls
         self.speed_label = DirectLabel(
             text="PLAYING",
-            text_fg=(0, 1, 0, 1),
-            text_scale=0.05,
+            text_fg=_sty.SUCCESS_COLOR, text_scale=0.05,
             text_align=TextNode.A_center,
             pos=(0.8, 0, 0.91),
-            frameColor=(0, 0, 0, 0),
-            parent=a2d,
+            frameColor=_sty.TRANSPARENT, parent=a2d,
         )
 
         btn_style = dict(
             text_scale=0.05,
             frameSize=(-0.08, 0.08, -0.03, 0.05),
-            relief=1,
-            parent=a2d,
+            relief=1, parent=a2d,
         )
         self.pause_btn = DirectButton(
             text="||", pos=(1.1, 0, 0.92),
-            command=self._set_speed, extraArgs=[0], **btn_style
+            command=self._set_speed, extraArgs=[0], **btn_style,
         )
         self.play_btn = DirectButton(
             text=">", pos=(1.3, 0, 0.92),
-            command=self._set_speed, extraArgs=[1], **btn_style
+            command=self._set_speed, extraArgs=[1], **btn_style,
         )
         self.fast_btn = DirectButton(
             text=">>", pos=(1.5, 0, 0.92),
-            command=self._set_speed, extraArgs=[2], **btn_style
+            command=self._set_speed, extraArgs=[2], **btn_style,
         )
 
-        # Z-level indicator
         self.z_label = DirectLabel(
             text="Z: -1",
-            text_fg=(0.7, 0.9, 1, 1),
-            text_scale=0.05,
+            text_fg=(0.7, 0.9, 1, 1), text_scale=0.05,
             text_align=TextNode.A_right,
             pos=(1.7, 0, 0.91),
-            frameColor=(0, 0, 0, 0),
-            parent=a2d,
+            frameColor=_sty.TRANSPARENT, parent=a2d,
         )
 
-        # Intruder count
+    def _build_left_panel(self) -> None:
+        """Intruder count, reputation, archetype breakdown."""
+        a2d = self.app.aspect2d
+
         self.intruder_label = DirectLabel(
             text="Intruders: 0",
-            text_fg=(1, 0.6, 0.6, 1),
-            text_scale=0.05,
+            text_fg=(1, 0.6, 0.6, 1), text_scale=0.05,
             text_align=TextNode.A_left,
             pos=(-1.7, 0, 0.76),
-            frameColor=(0, 0, 0, 0),
-            parent=a2d,
+            frameColor=_sty.TRANSPARENT, parent=a2d,
         )
 
-        # Party / archetype breakdown
+        self.reputation_label = DirectLabel(
+            text="Reputation: Unknown",
+            text_fg=(0.6, 0.6, 0.6, 1), text_scale=0.05,
+            text_align=TextNode.A_left,
+            pos=(-1.7, 0, 0.69),
+            frameColor=_sty.TRANSPARENT, parent=a2d,
+        )
+
         self.party_label = DirectLabel(
             text="",
-            text_fg=(0.8, 0.8, 0.8, 1),
-            text_scale=0.04,
+            text_fg=(0.8, 0.8, 0.8, 1), text_scale=0.04,
             text_align=TextNode.A_left,
-            pos=(-1.2, 0, 0.76),
-            frameColor=(0, 0, 0, 0),
-            parent=a2d,
+            pos=(-1.2, 0, 0.62),
+            frameColor=_sty.TRANSPARENT, parent=a2d,
         )
 
-        # ── Bottom bar: Tool + Hand ──
+    def _build_bottom_bar(self) -> None:
+        """Tool indicator, bag button, inventory panel, hover info, crafting book, debug buttons."""
+        a2d = self.app.aspect2d
+        event_bus = self.event_bus
+
         self.bottom_bar = DirectFrame(
-            frameColor=(0, 0, 0, 0.7),
+            frameColor=_sty.BAR_BG,
             frameSize=(-2.0, 2.0, -0.07, 0.07),
             pos=(0, 0, -0.93),
             parent=a2d,
         )
 
-        # Tool indicator
         self.tool_label = DirectLabel(
             text="Tool: Dig [X]",
-            text_fg=(0.8, 0.8, 1, 1),
-            text_scale=0.05,
+            text_fg=(0.8, 0.8, 1, 1), text_scale=0.05,
             text_align=TextNode.A_left,
             pos=(-1.7, 0, -0.95),
-            frameColor=(0, 0, 0, 0),
-            parent=a2d,
+            frameColor=_sty.TRANSPARENT, parent=a2d,
         )
 
-        # Hand contents
-        self.hand_label = DirectLabel(
-            text="Hand: Empty",
-            text_fg=(0.9, 0.9, 0.7, 1),
-            text_scale=0.05,
-            text_align=TextNode.A_left,
+        self.bag_btn = DirectButton(
+            text="Bag: 0",
+            text_fg=(0.9, 0.9, 0.7, 1), text_scale=0.04,
+            text_align=TextNode.A_center,
+            frameSize=(-0.10, 0.10, -0.03, 0.04),
+            frameColor=_sty.BUTTON_BG_DIM,
             pos=(-0.5, 0, -0.95),
-            frameColor=(0, 0, 0, 0),
+            command=self._toggle_bag_panel,
             parent=a2d,
         )
 
-        # Error message (center, red, fades)
+        # Inventory panel (hidden initially)
+        self._bag_panel_visible = False
+        self._bag_panel: DirectFrame | None = None
+        self._bag_scroll: DirectScrolledFrame | None = None
+        self._bag_item_labels: list[DirectLabel] = []
+        self._build_bag_panel()
+
+        self.hover_label = DirectLabel(
+            text="",
+            text_fg=(0.7, 0.85, 1, 1), text_scale=0.045,
+            text_align=TextNode.A_left,
+            pos=(0.2, 0, -0.95),
+            frameColor=_sty.TRANSPARENT, parent=a2d,
+        )
+
+        self.book_btn = DirectButton(
+            text="Palette [B]",
+            text_scale=0.04, text_fg=_sty.HIGHLIGHT_COLOR,
+            frameSize=(-0.12, 0.12, -0.03, 0.04),
+            frameColor=_sty.BUTTON_BG_DIM,
+            pos=(0.9, 0, -0.95),
+            command=lambda: event_bus.publish("toggle_crafting_book"),
+            parent=a2d,
+        )
+
+        # Debug buttons (dev mode only)
+        self.spawn_surface_btn = DirectButton(
+            text="Spawn Party",
+            text_scale=0.035, text_fg=(1, 0.6, 0.6, 1),
+            frameSize=(-0.13, 0.13, -0.03, 0.04),
+            frameColor=(0.2, 0.1, 0.1, 0.8),
+            pos=(1.05, 0, -0.95),
+            command=lambda: event_bus.publish("debug_spawn_party"),
+            parent=a2d,
+        )
+        self.spawn_single_btn = DirectButton(
+            text="Spawn 1",
+            text_scale=0.035, text_fg=(1, 0.7, 0.5, 1),
+            frameSize=(-0.09, 0.09, -0.03, 0.04),
+            frameColor=(0.2, 0.1, 0.1, 0.8),
+            pos=(1.3, 0, -0.95),
+            command=lambda: event_bus.publish("debug_spawn_single"),
+            parent=a2d,
+        )
+        self.kill_all_btn = DirectButton(
+            text="Kill All",
+            text_scale=0.035, text_fg=(1, 0.3, 0.3, 1),
+            frameSize=(-0.09, 0.09, -0.03, 0.04),
+            frameColor=(0.3, 0.05, 0.05, 0.8),
+            pos=(1.5, 0, -0.95),
+            command=lambda: event_bus.publish("debug_kill_all"),
+            parent=a2d,
+        )
+        self._update_spawn_buttons()
+
+    def _build_error_display(self) -> None:
+        """Center-screen error/notification label with fade timer."""
+        a2d = self.app.aspect2d
         self.error_label = DirectLabel(
             text="",
-            text_fg=(1, 0.3, 0.3, 1),
-            text_scale=0.06,
+            text_fg=_sty.ERROR_COLOR, text_scale=0.06,
             text_align=TextNode.A_center,
             pos=(0, 0, -0.75),
-            frameColor=(0, 0, 0, 0),
-            parent=a2d,
+            frameColor=_sty.TRANSPARENT, parent=a2d,
         )
         self._error_task_name = "hud_error_fade"
 
-        # Game over overlay (hidden initially)
+    def _build_game_over_overlay(self) -> None:
+        """Game Over banner (hidden initially)."""
+        a2d = self.app.aspect2d
         self.game_over_frame = DirectFrame(
             frameColor=(0, 0, 0, 0.8),
             frameSize=(-0.8, 0.8, -0.15, 0.15),
-            pos=(0, 0, 0),
-            parent=a2d,
+            pos=(0, 0, 0), parent=a2d,
         )
         self.game_over_label = DirectLabel(
             text="GAME OVER",
-            text_fg=(1, 0, 0, 1),
-            text_scale=0.12,
+            text_fg=(1, 0, 0, 1), text_scale=0.12,
             pos=(0, 0, -0.04),
-            frameColor=(0, 0, 0, 0),
+            frameColor=_sty.TRANSPARENT,
             parent=self.game_over_frame,
         )
         self.game_over_frame.hide()
 
-        # Intruder tracking
-        self._intruder_count = 0
-        self._archetype_counts: dict[str, int] = {}  # name → alive count
+    def _subscribe_events(self) -> None:
+        """Wire all event bus subscriptions."""
+        sub = self.event_bus.subscribe
+        sub("core_damaged", self._on_core_damaged)
+        sub("tick", self._on_tick)
+        sub("speed_changed", self._on_speed_changed)
+        sub("z_level_changed", self._on_z_changed)
+        sub("game_over", self._on_game_over)
+        sub("intruder_spawned", self._on_intruder_spawned)
+        sub("intruder_died", self._on_intruder_removed)
+        sub("intruder_escaped", self._on_intruder_removed)
+        sub("tool_changed", self._on_tool_changed)
+        sub("material_picked_up", self._on_material_picked_up)
+        sub("material_dropped", self._on_material_dropped)
+        sub("craft_success", self._on_craft_success)
+        sub("recipe_discovered", self._on_recipe_discovered)
+        sub("error_message", self._on_error_message)
+        sub("reputation_changed", self._on_reputation_changed)
+        sub("voxel_hover", self._on_voxel_hover)
+        sub("voxel_hover_clear", self._on_voxel_hover_clear)
+        sub("craft_mode_entered", self._on_craft_mode_entered)
+        sub("craft_mode_exited", self._on_craft_mode_exited)
+        sub("craft_hover_valid", self._on_craft_hover_valid)
+        sub("craft_hover_invalid", self._on_craft_hover_invalid)
+        sub("craft_hover_clear", self._on_craft_hover_clear_hud)
+        sub("craft_remaining_updated", self._on_craft_remaining_updated)
+        sub("render_mode_changed", self._on_render_mode_changed)
+        sub("dev_mode_changed", self._on_dev_mode_changed)
+        sub("mana_changed", self._on_mana_changed)
+        sub("soul_captured", self._on_soul_captured)
 
-        # Subscribe to events
-        event_bus.subscribe("core_damaged", self._on_core_damaged)
-        event_bus.subscribe("tick", self._on_tick)
-        event_bus.subscribe("speed_changed", self._on_speed_changed)
-        event_bus.subscribe("z_level_changed", self._on_z_changed)
-        event_bus.subscribe("game_over", self._on_game_over)
-        event_bus.subscribe("intruder_spawned", self._on_intruder_spawned)
-        event_bus.subscribe("intruder_died", self._on_intruder_removed)
-        event_bus.subscribe("intruder_escaped", self._on_intruder_removed)
-        event_bus.subscribe("tool_changed", self._on_tool_changed)
-        event_bus.subscribe("material_picked_up", self._on_material_picked_up)
-        event_bus.subscribe("material_dropped", self._on_material_dropped)
-        event_bus.subscribe("craft_success", self._on_craft_success)
-        event_bus.subscribe("error_message", self._on_error_message)
+    def _bind_keys(self) -> None:
+        """Register keyboard shortcuts for speed control and inventory toggle."""
+        _get = lambda a, fb: self._kb.get(a) if self._kb else fb
+        self.app.accept(_get("toggle_pause", "space"), self._toggle_pause)
+        self.app.accept(_get("speed_up", "+"), self._speed_up)
+        self.app.accept(_get("speed_up_alt", "="), self._speed_up)
+        self.app.accept(_get("speed_down", "-"), self._speed_down)
+        self.app.accept(_get("toggle_inventory", "i"), self._toggle_bag_panel)
 
-        # Keyboard shortcuts
-        app.accept("space", self._toggle_pause)
-        app.accept("+", self._speed_up)
-        app.accept("=", self._speed_up)  # Unshifted + key
-        app.accept("-", self._speed_down)
+    # ── Speed controls ───────────────────────────────────────────────
 
     def _set_speed(self, speed: int) -> None:
         self.game_state.time_manager.set_speed(speed)
@@ -237,14 +348,20 @@ class HUD:
         new_speed = max(0, tm.speed - 1)
         tm.set_speed(new_speed)
 
+    # ── Event handlers ───────────────────────────────────────────────
+
     def _on_core_damaged(self, hp: int, max_hp: int) -> None:
         self.core_hp_label["text"] = f"Core: {hp}/{max_hp}"
 
+    def _on_mana_changed(self, mana: float, max_mana: float, **kw) -> None:
+        self.mana_label["text"] = f"Mana: {int(mana)}/{int(max_mana)}"
+
+    def _on_soul_captured(self, souls: int, max_mana: float, **kw) -> None:
+        self._show_error(f"Soul captured! (+100 max mana)", color=_sty.MANA_COLOR)
+
     def _on_tick(self, tick: int) -> None:
-        # Update every 10 ticks to reduce overhead
         if tick % 10 == 0:
             self.time_label["text"] = f"Tick: {tick}"
-            # Refresh hand display (in case held material changed)
             self._refresh_hand()
 
     def _on_speed_changed(self, speed: int, **kwargs) -> None:
@@ -274,9 +391,8 @@ class HUD:
         if intruder is not None:
             name = intruder.archetype.name
             self._archetype_counts[name] = max(
-                0, self._archetype_counts.get(name, 1) - 1
+                0, self._archetype_counts.get(name, 1) - 1,
             )
-            # Remove zero-count entries
             if self._archetype_counts.get(name, 0) == 0:
                 self._archetype_counts.pop(name, None)
             self._refresh_party_label()
@@ -286,20 +402,19 @@ class HUD:
         if not self._archetype_counts:
             self.party_label["text"] = ""
             return
-        parts = []
-        for name in sorted(self._archetype_counts):
-            count = self._archetype_counts[name]
-            if count > 0:
-                parts.append(f"{name}: {count}")
+        parts = [
+            f"{name}: {count}"
+            for name, count in sorted(self._archetype_counts.items())
+            if count > 0
+        ]
         self.party_label["text"] = " | ".join(parts)
 
     def _on_tool_changed(self, mode: str) -> None:
         label = "Dig" if mode == "dig" else "Move"
         self.tool_label["text"] = f"Tool: {label} [X]"
 
-    def _on_material_picked_up(self, vtype: int, count: int) -> None:
-        name = _VTYPE_NAMES.get(vtype, f"Type {vtype}")
-        self.hand_label["text"] = f"Hand: {name} x{count}"
+    def _on_material_picked_up(self, **kwargs) -> None:
+        self._refresh_hand()
 
     def _on_material_dropped(self, **kwargs) -> None:
         self._refresh_hand()
@@ -308,30 +423,139 @@ class HUD:
         self._refresh_hand()
         self._show_error(f"Crafted: {recipe}", color=(0.3, 1, 0.3, 1))
 
-    def _refresh_hand(self) -> None:
-        ms = self.game_state.move_system
-        if ms is None or ms.held_material is None:
-            self.hand_label["text"] = "Hand: Empty"
+    def _on_recipe_discovered(self, recipe: str, total: int, **kwargs) -> None:
+        self._show_error(f"Recipe discovered: {recipe}!", color=(0.4, 0.9, 0.4, 1))
+
+    def _update_spawn_buttons(self) -> None:
+        """Show debug buttons only in dev mode."""
+        if _cfg.DEV_MODE:
+            self.spawn_surface_btn.show()
+            self.spawn_single_btn.show()
+            self.kill_all_btn.show()
         else:
-            vtype, count = ms.held_material
-            name = _VTYPE_NAMES.get(vtype, f"Type {vtype}")
-            self.hand_label["text"] = f"Hand: {name} x{count}"
+            self.spawn_surface_btn.hide()
+            self.spawn_single_btn.hide()
+            self.kill_all_btn.hide()
 
-    def _on_error_message(self, text: str) -> None:
-        self._show_error(text)
+    def _on_dev_mode_changed(self, **kwargs) -> None:
+        self._update_spawn_buttons()
 
-    def _show_error(self, text: str, color: tuple = (1, 0.3, 0.3, 1)) -> None:
+    def _on_error_message(self, text: str, color: tuple = _sty.ERROR_COLOR, **kwargs) -> None:
+        self._show_error(text, color)
+
+    def _show_error(self, text: str, color: tuple = _sty.ERROR_COLOR) -> None:
         self.error_label["text"] = text
         self.error_label["text_fg"] = color
-
-        # Cancel any existing fade task
         self.app.taskMgr.remove(self._error_task_name)
 
-        # Schedule fade after 2 seconds
         def clear_error(task: Task):
             self.error_label["text"] = ""
             return task.done
 
         self.app.taskMgr.doMethodLater(
-            2.0, clear_error, self._error_task_name
+            2.0, clear_error, self._error_task_name,
         )
+
+    def _on_reputation_changed(
+        self, lethality: float = 0.5, richness: float = 0.0, **kwargs,
+    ) -> None:
+        """Update the reputation label based on dungeon profile."""
+        if lethality > 0.7 and richness < 0.4:
+            self.reputation_label["text"] = "Reputation: Deadly"
+            self.reputation_label["text_fg"] = (1, 0.2, 0.2, 1)
+        elif richness > 0.4:
+            self.reputation_label["text"] = "Reputation: Treasure Hoard"
+            self.reputation_label["text_fg"] = (1, 0.85, 0.2, 1)
+        else:
+            self.reputation_label["text"] = "Reputation: Moderate"
+            self.reputation_label["text_fg"] = (0.6, 0.6, 0.6, 1)
+
+    def _on_voxel_hover(self, x: int, y: int, z: int, **kwargs) -> None:
+        """Display voxel type, coordinates, and mode-specific data when hovering.
+
+        When craft mode is active, the craft hover handlers set the label
+        instead (skip generic text to avoid flickering).
+        """
+        if self._craft_recipe_name is not None:
+            return  # Craft hover handlers manage the label
+
+        grid = self.game_state.voxel_grid
+        if grid is None:
+            return
+        vtype = grid.get(x, y, z)
+        name = _VTYPE_NAMES.get(vtype, f"Type {vtype}")
+        text = f"[{name}] ({x}, {y}, {-z})"
+
+        mode = self._render_mode
+        if mode == RENDER_MODE_HEAT:
+            temp = float(grid.temperature[x, y, z])
+            text += f"  {temp:.0f}\u00b0C"
+        elif mode == RENDER_MODE_HUMIDITY:
+            hum = float(grid.humidity[x, y, z])
+            text += f"  Humidity: {hum:.2f}"
+        elif mode == RENDER_MODE_STRUCTURAL:
+            stress = float(grid.stress_ratio[x, y, z])
+            load = float(grid.load[x, y, z])
+            text += f"  Stress: {stress:.2f}  Load: {load:.1f}"
+
+        self.hover_label["text"] = text
+
+    def _on_voxel_hover_clear(self, **kwargs) -> None:
+        self.hover_label["text"] = ""
+
+    def _on_render_mode_changed(self, mode: str, **kwargs) -> None:
+        self._render_mode = mode
+
+    def _on_craft_mode_entered(self, recipe_name: str, **kwargs) -> None:
+        self._craft_recipe_name = recipe_name
+        self._update_craft_tool_label()
+
+    def _on_craft_mode_exited(self, **kwargs) -> None:
+        self._craft_recipe_name = None
+        self._craft_remaining = 0
+        mode = self.game_state.build_mode
+        label = "Dig" if mode == "dig" else "Move"
+        self.tool_label["text"] = f"Tool: {label} [X]"
+        self.tool_label["text_fg"] = (0.8, 0.8, 1, 1)
+        self.hover_label["text"] = ""
+
+    def _on_craft_remaining_updated(
+        self, recipe_name: str, remaining: int, **kwargs,
+    ) -> None:
+        """Update stored remaining count and refresh the tool label."""
+        self._craft_remaining = remaining
+        self._update_craft_tool_label()
+
+    def _update_craft_tool_label(self) -> None:
+        """Refresh the tool label with recipe name and remaining count."""
+        if self._craft_recipe_name is None:
+            return
+        text = f"Crafting: {self._craft_recipe_name}"
+        if self._craft_remaining > 0:
+            text += f" \u2014 {self._craft_remaining} remaining"
+        text += " (click to place, ESC to cancel)"
+        self.tool_label["text"] = text
+        self.tool_label["text_fg"] = _sty.CRAFT_STATUS_COLOR
+
+    def _on_craft_hover_valid(
+        self, x: int, y: int, z: int, recipe_name: str = "",
+        behavior_hint: str = "", mana_cost: int = 0, **kwargs,
+    ) -> None:
+        """Show green hover text with behavior hint and mana cost."""
+        name = recipe_name or self._craft_recipe_name or "?"
+        lines = [f"Click to craft {name} at ({x}, {y}, {-z})"]
+        if behavior_hint:
+            lines.append(behavior_hint)
+        if mana_cost > 0:
+            lines.append(f"Mana cost: {mana_cost}")
+        self.hover_label["text"] = "\n".join(lines)
+        self.hover_label["text_fg"] = _sty.SUCCESS_COLOR
+
+    def _on_craft_hover_invalid(self, x: int, y: int, z: int, **kwargs) -> None:
+        """Show red hover text for an invalid craft position."""
+        self.hover_label["text"] = f"Cannot craft here ({x}, {y}, {-z})"
+        self.hover_label["text_fg"] = _sty.ERROR_COLOR
+
+    def _on_craft_hover_clear_hud(self, **kwargs) -> None:
+        """Clear the hover label when craft hover clears."""
+        self.hover_label["text"] = ""

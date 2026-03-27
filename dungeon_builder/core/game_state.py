@@ -1,4 +1,10 @@
-"""Central game state container. Holds references to all subsystems."""
+"""Central game state container. Holds references to all subsystems.
+
+Dependencies: (none at runtime — TYPE_CHECKING only)
+Dependents: main, building.build_system, building.move_system, building.crafting_system,
+    rendering.camera, ui.hud, ui.main_menu, ui.object_palette,
+    tests/building/, tests/core/test_game_state.py
+"""
 
 from __future__ import annotations
 
@@ -6,12 +12,14 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from dungeon_builder.core.event_bus import EventBus
+    from dungeon_builder.core.keybinding_registry import KeybindingRegistry
     from dungeon_builder.core.time_manager import TimeManager
     from dungeon_builder.world.voxel_grid import VoxelGrid
     from dungeon_builder.dungeon_core.core import DungeonCore
     from dungeon_builder.building.build_system import BuildSystem
     from dungeon_builder.building.move_system import MoveSystem
     from dungeon_builder.world.pathfinding import AStarPathfinder
+    from dungeon_builder.dungeon_core.mana import ManaSystem
 
 
 class GameState:
@@ -29,7 +37,15 @@ class GameState:
         self.build_system: BuildSystem | None = None
         self.move_system: MoveSystem | None = None
         self.pathfinder: AStarPathfinder | None = None
+        self.keybinding_registry: KeybindingRegistry | None = None
+        self.mana_system: ManaSystem | None = None
 
         # Current build mode for mouse interaction
         self.build_mode: str = "dig"
         self.game_over: bool = False
+        self.menu_open: bool = True  # True at startup (main menu showing)
+        self.craft_mode_active: bool = False  # True when player selected a recipe to place
+        self.dev_mode: bool = True  # Starts in dev mode (toggleable in Options)
+
+        # Currently selected enchanted block (None if nothing selected)
+        self.selected_block: tuple[int, int, int] | None = None

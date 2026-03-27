@@ -1,13 +1,36 @@
-"""Individual intruder data model and state machine."""
+"""Individual intruder data model and state machine.
+
+Dependencies: config, intruders.archetypes, intruders.equipment,
+    intruders.familiar, intruders.sprite, intruders.personal_map
+Dependents: core.save_system, intruders.decision, intruders.interactions,
+    intruders.knowledge_archive, intruders.party, intruders.familiar,
+    rendering.intruder_renderer, tests/intruders/,
+    tests/physics/test_water.py, tests/core/test_save_system.py,
+    tests/rendering/test_intruder_renderer.py,
+    tests/building/test_pressure_plate_chain.py,
+    tests/benchmarks/benchmark_performance.py
+"""
 
 from __future__ import annotations
 
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
+import dungeon_builder.config as _cfg
+from dungeon_builder.config import (
+    MORALE_LOW_THRESHOLD,
+    MORALE_HIGH_THRESHOLD,
+    MORALE_SLOW_FACTOR,
+    MORALE_FAST_FACTOR,
+    MORALE_DAMAGE_BONUS,
+)
+
 if TYPE_CHECKING:
-    from dungeon_builder.intruders.archetypes import ArchetypeStats, IntruderObjective
+    from dungeon_builder.intruders.archetypes import ArchetypeStats, IntruderObjective, IntruderStatus
+    from dungeon_builder.intruders.equipment import Equipment, ItemEffect
+    from dungeon_builder.intruders.familiar import Familiar
     from dungeon_builder.intruders.personal_map import PersonalMap
+    from dungeon_builder.intruders.sprite import Sprite
 
 
 class IntruderState(Enum):
@@ -25,7 +48,8 @@ class Intruder:
     """A single intruder agent inside the dungeon.
 
     Each intruder is defined by its *archetype* (shared, immutable stats)
-    plus per-instance mutable state (position, HP, personal map, etc.).
+    plus per-instance mutable state (position, HP, equipment, personal
+    map, food/water supplies, etc.).
     """
 
     __slots__ = (
@@ -36,6 +60,7 @@ class Intruder:
         "x", "y", "z",
         # Combat
         "hp", "max_hp",
+        "shield_hp",
         # State machine
         "state",
         "objective",
@@ -54,12 +79,32 @@ class Intruder:
         "interaction_type",
         "interaction_target",
         "interaction_ticks",
-        # Frenzy
-        "frenzy_active",
         # Loot
         "loot_count",
         # Tunneling progress: maps (x,y,z) -> ticks spent digging
         "dig_progress",
+        # Vision cache: True when intruder has moved and needs re-scan
+        "_vision_dirty",
+        # Path cache: (start, goal, map_generation) -> avoids repathing
+        "_path_cache_key",
+        # Social dynamics
+        "level",
+        "status",
+        "morale",
+        # Equipment (fixed at spawn, only depleted)
+        "equipment",
+        # Familiars (Mole Tamer only)
+        "familiars",
+        # Sprites (Eidolon only)
+        "sprites",
+        "sprite_summon_cooldown",
+        # Supplies (constantly deplete)
+        "food",
+        "water",
+        # Exploration data (all intruders, degree varies by archetype)
+        "maps_collected",
+        # Eidolon entertainment meter
+        "entertainment",
     )
 
     def __init__(
@@ -71,8 +116,13 @@ class Intruder:
         archetype: ArchetypeStats,
         objective: IntruderObjective,
         personal_map: PersonalMap,
+        equipment: Equipment | None = None,
         party_id: int | None = None,
+        level: int = 1,
+        status: IntruderStatus | None = None,
     ) -> None:
+        from dungeon_builder.intruders.archetypes import IntruderStatus as _IS
+
         self.id = intruder_id
         self.archetype = archetype
 
@@ -80,8 +130,13 @@ class Intruder:
         self.y = y
         self.z = z
 
-        self.hp = archetype.hp
-        self.max_hp = archetype.hp
+        # Level stat scaling (applied to mutable instance fields, not frozen archetype)
+        self.level: int = level
+        self.status: IntruderStatus = status if status is not None else _IS.GRUNT
+        hp_mult = (1.0 + (level - 1) * _cfg.LEVEL_HP_SCALE) * _cfg.INTRUDER_HP_MULTIPLIER
+        self.hp = int(archetype.hp * hp_mult)
+        self.max_hp = self.hp
+        self.shield_hp: int = 0
 
         self.state = IntruderState.SPAWNING
         self.objective = objective
@@ -102,9 +157,39 @@ class Intruder:
         self.interaction_target: tuple[int, int, int] | None = None
         self.interaction_ticks: int = 0
 
-        self.frenzy_active: bool = False
         self.loot_count: int = 0
         self.dig_progress: dict[tuple[int, int, int], int] = {}
+        self._vision_dirty: bool = True
+        self._path_cache_key: tuple | None = None
+        self.morale: float = _cfg.MORALE_BASE
+
+        # Equipment
+        if equipment is not None:
+            self.equipment: Equipment = equipment
+        else:
+            from dungeon_builder.intruders.equipment import Equipment as _Eq
+            self.equipment = _Eq(archetype.base_inventory_slots)
+
+        # Initialize shield HP from equipped shield gear
+        from dungeon_builder.intruders.equipment import ItemEffect as _IE
+        self.shield_hp = self.equipment.get_passive_value(_IE.SHIELD)
+
+        # Familiars (empty list for non-Mole-Tamers)
+        self.familiars: list[Familiar] = []
+
+        # Supplies
+        self.food: float = archetype.food_capacity
+        self.water: float = archetype.water_capacity
+
+        # Exploration tracking
+        self.maps_collected: int = 0
+
+        # Sprites (empty list for non-Eidolons)
+        self.sprites: list[Sprite] = []
+        self.sprite_summon_cooldown: int = 0
+
+        # Eidolon entertainment
+        self.entertainment: float = 1.0
 
     # ── Convenience properties ──────────────────────────────────────
 
@@ -122,31 +207,86 @@ class Intruder:
 
     @property
     def effective_speed(self) -> int:
-        if self.frenzy_active:
-            return self.archetype.speed * 2
         return self.archetype.speed
 
     @property
     def effective_damage(self) -> int:
-        if self.frenzy_active:
-            return int(self.archetype.damage * 1.5)
-        return self.archetype.damage
+        # Level scaling + global multiplier applied to base archetype damage
+        damage_mult = (1.0 + (self.level - 1) * _cfg.LEVEL_DAMAGE_SCALE) * _cfg.INTRUDER_DAMAGE_MULTIPLIER
+        base = int(self.archetype.damage * damage_mult)
+        # Equipment damage boost
+        from dungeon_builder.intruders.equipment import ItemEffect as _IE
+        gear_bonus = self.equipment.get_passive_value(_IE.DAMAGE_BOOST)
+        base += gear_bonus
+        # Morale bonus
+        if self.morale > MORALE_HIGH_THRESHOLD:
+            base = int(base * MORALE_DAMAGE_BONUS)
+        return base
 
     @property
     def effective_move_interval(self) -> int:
-        if self.frenzy_active:
-            return max(1, self.move_interval // 2)
-        return self.move_interval
+        base = self.move_interval
+        if self.morale < MORALE_LOW_THRESHOLD:
+            base = int(base * MORALE_SLOW_FACTOR)
+        elif self.morale > MORALE_HIGH_THRESHOLD:
+            base = max(1, int(base * MORALE_FAST_FACTOR))
+        return max(1, base)
+
+    @property
+    def has_fire_immunity(self) -> bool:
+        """True if any carried equipment provides fire immunity."""
+        from dungeon_builder.intruders.equipment import ItemEffect as _IE
+        return self.equipment.has_effect(_IE.FIRE_IMMUNITY)
+
+    @property
+    def has_water_breathing(self) -> bool:
+        """True if any carried equipment provides water breathing."""
+        from dungeon_builder.intruders.equipment import ItemEffect as _IE
+        return self.equipment.has_effect(_IE.WATER_BREATHING)
+
+    @property
+    def effective_perception(self) -> int:
+        """Perception range including equipment bonuses (torch ILLUMINATE).
+
+        Darkvision is NOT included here — it depends on position, so the
+        decision engine applies it separately in ``_update_vision``.
+        """
+        base = self.archetype.perception_range
+        from dungeon_builder.intruders.equipment import ItemEffect as _IE
+        torch = self.equipment.find_item(_IE.ILLUMINATE)
+        if torch is not None and not torch.depleted:
+            base += torch.template.value
+        return base
+
+    @property
+    def effective_food_rate(self) -> float:
+        """Food consumed per tick, accounting for supply efficiency and sustenance."""
+        return self.archetype.food_rate * self.archetype.supply_efficiency
+
+    @property
+    def effective_water_rate(self) -> float:
+        """Water consumed per tick, accounting for supply efficiency."""
+        return self.archetype.water_rate * self.archetype.supply_efficiency
+
+    # ── Damage ──────────────────────────────────────────────────────
 
     def take_damage(self, amount: int) -> None:
-        """Apply damage, clamping HP to 0."""
-        self.hp = max(0, self.hp - amount)
+        """Apply damage.  Shield HP absorbs first, then HP.  Clamps to 0."""
+        if self.shield_hp > 0:
+            absorbed = min(self.shield_hp, amount)
+            self.shield_hp -= absorbed
+            amount -= absorbed
+        if amount > 0:
+            self.hp = max(0, self.hp - amount)
         if self.hp == 0:
             self.state = IntruderState.DEAD
 
     def __repr__(self) -> str:
         return (
             f"Intruder(id={self.id}, {self.archetype.name}, "
+            f"L{self.level} {self.status.name}, "
             f"pos=({self.x},{self.y},{self.z}), "
-            f"hp={self.hp}/{self.max_hp}, state={self.state.name})"
+            f"hp={self.hp}/{self.max_hp}, morale={self.morale:.2f}, "
+            f"food={self.food:.1f}, water={self.water:.1f}, "
+            f"state={self.state.name})"
         )

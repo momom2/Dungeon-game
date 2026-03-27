@@ -1,4 +1,9 @@
-"""The dungeon core: the player's central objective to defend."""
+"""The dungeon core: the player's central objective to defend.
+
+Dependencies: config, core.event_bus
+Dependents: main (wiring), core.game_state, intruders.decision,
+    tests/core/test_dungeon_core.py, tests/intruders/
+"""
 
 from __future__ import annotations
 

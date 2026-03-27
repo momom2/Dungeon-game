@@ -1,4 +1,9 @@
-"""Gravity physics: loose blocks fall, disconnected blocks become loose."""
+"""Gravity physics: loose blocks fall, disconnected blocks become loose.
+
+Dependencies: config, core.event_bus, world.voxel_grid
+Dependents: main (wiring), tests/physics/test_gravity.py,
+    tests/physics/test_impact_cascade.py
+"""
 
 from __future__ import annotations
 
@@ -6,8 +11,8 @@ import numpy as np
 from typing import TYPE_CHECKING
 
 from dungeon_builder.config import (
-    CHUNK_SIZE,
     VOXEL_AIR,
+    VOXEL_LAVA,
     VOXEL_WATER,
     VOXEL_WEIGHT,
     VOXEL_MAX_LOAD,
@@ -25,7 +30,6 @@ from dungeon_builder.config import (
     SHOCK_STRUCTURAL_FACTOR,
     MAX_SHOCK_PROPAGATION_STEPS,
     SHATTER_THRESHOLD,
-    MAX_CASCADE_DEPTH,
     GRANULAR_POROSITY_THRESHOLD,
     REPOSE_TICK_INTERVAL,
     MAX_SPREAD_PER_TICK,
@@ -85,6 +89,10 @@ class GravityPhysics:
                 if vtype != VOXEL_AIR:
                     self._granular_lut[vtype] = True
 
+        # Snapshot of grid+loose at last connectivity check for skip-if-unchanged
+        self._last_connectivity_grid: np.ndarray | None = None
+        self._last_connectivity_loose: np.ndarray | None = None
+
         event_bus.subscribe("tick", self._on_tick)
 
     def _on_tick(self, tick: int, **kw) -> None:
@@ -103,6 +111,9 @@ class GravityPhysics:
         temp = grid.temperature
         humidity = grid.humidity
         fall_dist = grid.fall_distance
+
+        # Snapshot grid before falling so we can diff for targeted dirty marking
+        prev_grid = voxels.copy()
 
         fell_any = False
 
@@ -137,7 +148,13 @@ class GravityPhysics:
 
         if fell_any:
             self._apply_impacts()
-            grid.mark_all_dirty()
+            grid.bump_physics_generation()
+            # Targeted dirty marking: only mark chunks that actually changed
+            # instead of mark_all_dirty() which marks all 640 chunks.
+            changed = voxels != prev_grid
+            if np.any(changed):
+                xs, ys, zs = np.where(changed)
+                grid.mark_blocks_dirty(xs, ys, zs)
             self.event_bus.publish("blocks_fell")
 
     def _apply_impacts(self) -> None:
@@ -203,6 +220,9 @@ class GravityPhysics:
         temp = grid.temperature
         humidity = grid.humidity
         w, d, h = grid.width, grid.depth, grid.height
+
+        # Snapshot for targeted dirty marking
+        prev_grid = voxels.copy()
 
         spread_any = False
 
@@ -361,7 +381,12 @@ class GravityPhysics:
                 break
 
         if spread_any:
-            grid.mark_all_dirty()
+            grid.bump_physics_generation()
+            # Targeted dirty marking: only mark chunks that actually changed
+            changed = voxels != prev_grid
+            if np.any(changed):
+                xs, ys, zs = np.where(changed)
+                grid.mark_blocks_dirty(xs, ys, zs)
             self.event_bus.publish("blocks_spread")
 
     def _propagate_shock(self, impact_energy: np.ndarray) -> None:
@@ -450,6 +475,7 @@ class GravityPhysics:
         total_new_loose = 0
         total_shattered = 0
         remaining = MAX_CASCADE_PER_TICK
+        dirty_pos = []  # Collect (xs, ys, zs) arrays for dirty marking
 
         # Apply shattering
         if np.any(should_shatter) and remaining > 0:
@@ -467,6 +493,7 @@ class GravityPhysics:
             loose[sxs, sys_, szs] = False
             total_shattered += count
             remaining -= count
+            dirty_pos.append((sxs, sys_, szs))
 
         # Apply cracking
         if np.any(should_crack) and remaining > 0:
@@ -482,9 +509,14 @@ class GravityPhysics:
 
             loose[cxs, cys, czs] = True
             total_new_loose += count
+            dirty_pos.append((cxs, cys, czs))
 
         if total_new_loose > 0 or total_shattered > 0:
-            grid.mark_all_dirty()
+            all_xs = np.concatenate([p[0] for p in dirty_pos])
+            all_ys = np.concatenate([p[1] for p in dirty_pos])
+            all_zs = np.concatenate([p[2] for p in dirty_pos])
+            grid.bump_physics_generation()
+            grid.mark_blocks_dirty(all_xs, all_ys, all_zs)
             self.event_bus.publish(
                 "shock_cascade",
                 cracked=total_new_loose,
@@ -492,25 +524,52 @@ class GravityPhysics:
             )
 
     def _check_connectivity(self) -> None:
-        """Mark blocks as loose if not connected to any anchor."""
+        """Mark blocks as loose if not connected to any anchor.
+
+        Uses iterative 6-connected dilation from anchors through solid
+        non-loose blocks.  Optimised with early termination when the
+        connected frontier stops growing.
+
+        Skips the expensive flood-fill if the grid and loose arrays haven't
+        changed since the last check (O(1) generation counter check).
+        """
         grid = self.voxel_grid
         voxels = grid.grid
         loose = grid.loose
 
+        # Skip if grid+loose unchanged since last check
+        if (
+            self._last_connectivity_grid is not None
+            and np.array_equal(voxels, self._last_connectivity_grid)
+            and np.array_equal(loose, self._last_connectivity_loose)
+        ):
+            return
+
+        w, d, h = grid.width, grid.depth, grid.height
+
         # Solid, non-loose blocks need connectivity checking
         # Water blocks are excluded (they flow, not structural)
-        solid_nonloose = (voxels != VOXEL_AIR) & (voxels != VOXEL_WATER) & (~loose)
+        solid_nonloose = (voxels != VOXEL_AIR) & (voxels != VOXEL_WATER) & (voxels != VOXEL_LAVA) & (~loose)
 
         # Seed: anchor blocks are always connected
-        connected = self._anchor_lut[voxels].copy()
+        connected = self._anchor_lut[voxels] & solid_nonloose
 
-        # Iterative 6-connected dilation through solid non-loose blocks
-        max_iter = grid.width + grid.depth + grid.height
+        # Iterative 6-connected dilation — track connected count for
+        # faster convergence detection (avoids full array_equal each iter)
+        prev_count = int(np.count_nonzero(connected))
+        target_count = int(np.count_nonzero(solid_nonloose))
+
+        # If all solid blocks are anchors or no non-anchor solids, skip
+        if prev_count >= target_count:
+            self._last_connectivity_grid = voxels.copy()
+            self._last_connectivity_loose = loose.copy()
+            return
+
+        max_iter = w + d + h
 
         for _ in range(max_iter):
+            # Expand in 6 directions (in-place OR for speed)
             expanded = connected.copy()
-
-            # Expand in 6 directions
             expanded[1:, :, :] |= connected[:-1, :, :]
             expanded[:-1, :, :] |= connected[1:, :, :]
             expanded[:, 1:, :] |= connected[:, :-1, :]
@@ -521,16 +580,26 @@ class GravityPhysics:
             # Only keep expansion into solid non-loose blocks
             expanded &= solid_nonloose
 
-            if np.array_equal(expanded, connected):
+            new_count = int(np.count_nonzero(expanded))
+            if new_count == prev_count:
                 break
-
+            prev_count = new_count
             connected = expanded
+
+            # Early exit if everything is connected
+            if new_count >= target_count:
+                break
 
         # Any solid non-loose block not connected becomes loose
         newly_loose = solid_nonloose & (~connected)
 
         if np.any(newly_loose):
             loose[newly_loose] = True
-            grid.mark_all_dirty()
-            count = int(np.sum(newly_loose))
+            xs, ys, zs = np.where(newly_loose)
+            grid.mark_blocks_dirty(xs, ys, zs)
+            count = int(len(xs))
             self.event_bus.publish("structural_disconnect", count=count)
+
+        # Save snapshot for skip-if-unchanged on next call
+        self._last_connectivity_grid = voxels.copy()
+        self._last_connectivity_loose = loose.copy()
